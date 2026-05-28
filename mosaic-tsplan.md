@@ -1,0 +1,706 @@
+# MOSAIC 项目实施计划
+
+> A 股版 ATLAS：自我改进多智能体交易框架。
+> 基于 ETFAgents 混合架构（Python sidecar + TypeScript 前端）。
+>
+> **工作主文档**。每完成一项 sub-step 后更新对应章节的 **状态** + **完成时戳** +
+> **追加备注**。计划超过子步骤范围的发现/决策一律先在 **§14 待决议题** 章节记录。
+> 在用户能验证的 checkpoint 处暂停，不私自滚动到下一阶段。
+
+---
+
+## 0. 项目背景与目标
+
+**MOSAIC** = 把 [ATLAS](https://github.com/general-intelligence-capital/atlas)
+4 层多智能体自我改进交易框架**完整复刻**并**适配 A 股市场**。沿用
+[ETFAgents](file:///home/hap/Projects/ETFAgents) 的混合架构经验（Python sidecar
++ TypeScript 前端），最大化降低开发成本。
+
+**ATLAS 公开仓只有展示性 ~3,400 LOC**（src/janus.py 571 + src/mirofish/ ~2,800
++ 架构文档 + 通用 prompt 模板）；**核心 IP（25+ 训练好的 prompt、agents/、
+autoresearch loop、market_data.py、scorecard.py、API 集成）全部不在仓里**。所
+以这是 **基于架构文档 + ETFAgents 经验从零实现** 一套自己的 A 股版 ATLAS。
+
+## 1. 用户已确认的关键决策
+
+- **Q1=a**：完整复刻 ATLAS 全部能力（25+ agents + autoresearch + PRISM + JANUS + MiroFish + 执行 + TUI）
+- **Q2**：数据源 = **Tushare + akshare + FRED + opencli/brave**（A 股 + 全球宏观 + 新闻）
+- **Q3=b**：autoresearch 推到 Phase 4（agents + 每日循环 + scorecard 跑通后）
+- **Q4=a**：保留 ATLAS 原 4 位 US superinvestor（Druckenmiller / Aschenbrenner / Baker / Ackman），把哲学过滤器应用到 A 股
+- **Q5=a**：执行层 = **仅 paper trading + backtrader**（复用 ETFAgents）
+- **Q6=c**：autoresearch 用 **Git + SQLite 混合**（git 存 prompt 内容，SQLite 存元数据/Sharpe/branch 状态）
+- **代号**：MOSAIC（中英语义中性，多 agent → 拼图比喻贴切）
+- **Cohort 配置**：7 个（含新增 2006-2007 牛市 + 2008 危机 A 股本地段）
+- **双语**：中英文可切换，**默认 Chinese**
+- **LLM provider**：默认 **Anthropic Claude Sonnet**（与 ATLAS 原版对齐），
+  备选 **DeepSeek**（成本约 1/10）+ 本地 **Lemonade Qwen**（开发零成本）
+- **启动 cohort**：`euphoria_2021`（先单 cohort 跑通 Phase 2-4，再扩展 PRISM）
+- **PRISM 并发**：cohort 之间顺序训练，cohort 内 layer 间顺序、layer 内最多
+  **5 个 agent 并发**（避免 Anthropic 限速）
+- **prompt 修改约束**：同一 agent 24h 最多 1 次 mutation；3 天内不能撤销 keep 的修改
+- **Branch 命名**：`cohort/{cohort_name}/auto/{agent}/{YYYY-MM-DD}`
+
+## 2. 总体架构
+
+```
+TypeScript (mosaic-ts/)               JSON-RPC stdio        Python sidecar (mosaic/)
+─────────────────────────             ───────────────       ──────────────────────────
+CLI (commander) + TUI (Ink)           newline-delimited     bridge/ (复制 etfagents/bridge/)
+LangGraph.js orchestration:                                  dataflows/ (Tushare + akshare + FRED + opencli + brave)
+  Layer 1: 10 macro agents           ⇄                       agents/utils/scorecard (新)
+  Layer 2: 7  sector agents          ⇄ JSON-RPC              agents/utils/autoresearch (新)
+  Layer 3: 4  superinvestor          ⇄ stdio                 agents/utils/git_ops (新)
+  Layer 4: CRO/Alpha/Exec/CIO                                prism/ (新)
+LLM clients (Anthropic-first)                                janus.py (port ATLAS 公开 571 LOC)
+Scorecard / Darwinian 视图                                   mirofish/ (port ATLAS 公开 ~2,800 LOC)
+Cohort 切换 UI（PRISM）                                       paper_trading/ + backtest/ (复用 ETFAgents)
+                                                              persistence: SQLite + git repo
+```
+
+**关键架构原则**（沿用 ETFAgents）：
+- Bridge 用**行分隔 JSON-RPC over stdio**（与 ETFAgents 一致）
+- 工具调用边界用字符串/JSON（**无跨语言 DataFrame 传输**）
+- 解释器发现：`MOSAIC_PYTHON` env > `<repo>/.venv/bin/python` > fail loud
+- 所有 numpy / pandas / git / SQLite / Tushare 重逻辑保留在 Python 端
+- TS 端只承担 LLM 编排、CLI、TUI、scorecard 可视化
+
+**与 ETFAgents 的关键差异**：
+- 25+ agents vs 6 analyst（节点数量 ↑3x）
+- **自我改进**（autoresearch + Darwinian + git）—— ETFAgents 完全没有
+- **多 cohort 训练**（PRISM）—— ETFAgents 是单 graph
+- **反身性模拟**（MiroFish）—— ETFAgents 没有
+- **Cohort 元加权**（JANUS）—— 新增
+
+---
+
+## 3. 阶段总览
+
+| Phase | 范围 | 估算 turns | 状态 |
+|---|---|---|---|
+| 0 | Python sidecar + bridge（Tushare/FRED + 10 macro tools） | 5–6 | 🟡 进行中（Day 1 ✅ 2026-05-28） |
+| 1 | TS skeleton + bridge-client（直接复用 ETFAgents Phase 1） | 3–4 | ⏭ |
+| 2 | Daily cycle MVP：25 agents + 4 层 LangGraph.js（单 cohort） | 11–12 | ⏭ |
+| 3 | Scorecard + Darwinian 权重 | 4 | ⏭ |
+| 4 | Autoresearch（git + SQLite，prompt mutation + keep/revert） | 5–6 | ⏭ |
+| 5 | PRISM 7 cohort 训练编排 | 5–6 | ⏭ |
+| 6 | JANUS 元层（port ATLAS 571 LOC） | 3 | ⏭ |
+| 7 | MiroFish 反身性模拟（port ATLAS ~2,800 LOC + Tushare 适配） | 4–5 | ⏭ |
+| 8 | 执行层（paper + backtrader，复用 ETFAgents） | 4 | ⏭ |
+| 9 | Ink TUI + CLI + 文档 + CI 部署 | 6–8 | ⏭ |
+| **总计** | | **50–58 turns / 6.5–9.5 个月业余工时** | |
+
+---
+
+## 4. ETFAgents 复用清单（成本控制关键）
+
+> ETFAgents 已完成 Phase 0/1 + Phase 2 sub-step 2.5b，下表的代码全部已经过测
+> 试和真实 LLM/Tushare 端到端验证过，可以直接复制到 MOSAIC。
+
+### 4.1 直接整体复制（仅改 etfagents → mosaic 包名）：约 7,000 LOC
+
+| 来源 | 行数 | 用途 |
+|---|---|---|
+| `etfagents/bridge/` 全部 → `mosaic/bridge/` | ~600 | Python sidecar 模板（JSON-RPC 协议、handler 注册、stdio 循环、错误码） |
+| `etfagents/cache_manager.py` → `mosaic/cache_manager.py` | ~250 | API/signals/snapshots/checkpoints 缓存管理 |
+| `etfagents/paper_trading/` → `mosaic/paper_trading/` | ~1,500 | bcrypt 用户 + SQLite 仓位 + 佣金规则 |
+| `etfagents/backtest/{backtrader_engine.py, signals.py, cache.py}` → `mosaic/backtest/` | ~3,800 | 候选池回测 + signal 抽取 |
+| `etfagents/dataflows/` 除 fred/macro_data 外 → `mosaic/dataflows/` | ~3,500 | tushare/akshare/yfinance/opencli/brave/stockstats 等数据层 |
+| `ts/src/bridge/` → `mosaic-ts/src/bridge/` | ~700 | TS 端 BridgeClient + Python 解释器发现 + 错误映射 + 类型化 RPC |
+| `ts/src/llm/factory.ts` → `mosaic-ts/src/llm/factory.ts` | ~120 | 多 provider LLM 工厂（OpenAI 兼容 + Anthropic + Google） |
+| `tests/test_bridge_protocol.py` → `tests/test_bridge_protocol.py` | ~280 | bridge 集成测试（subprocess 黑盒驱动） |
+
+**复制成本：~7,000 LOC，预计 1–2 turns 改名 + 测试。**
+
+### 4.2 大段复用 + 小适配：约 5,400 LOC
+
+| 来源 | 适配点 |
+|---|---|
+| `ts/src/agents/helpers/{content,process_narration,tool_report_chain}.ts` ~590 | 直接用，无适配 |
+| `ts/src/agents/helpers/{report_leads,role_terms}.ts` ~330 | role-term map 加 ATLAS 角色（CRO/CIO/Druckenmiller/Aschenbrenner/Baker/Ackman 等） |
+| `ts/src/agents/helpers/validate_refine.ts` ~400 | spec 增加 ATLAS-style sections（每个 agent 自己的 required_top_sections） |
+| `ts/src/agents/helpers/market_levels.ts` ~210 | label 集扩展为 A 股语境（北向资金/跌停/ST/股权登记/解禁/集合竞价 等） |
+| `ts/src/agents/helpers/trader_format.ts` ~390 | 部分复用；`stripConstituentTradeInstructions` 在 ATLAS 不适用，替换为 ATLAS 风险纪律 helper |
+| `ts/src/agents/helpers/render.ts` ~70 | 改造为 4 层渲染（Layer 1/2/3/4 各一段） |
+| `etfagents/dataflows/interface.py`（route_to_vendor）~280 | 加 FRED 路由 |
+| `etfagents/agents/utils/{agent_states,memory,analysis_memory,structured,report_leads,validate_refine}.py` ~3,000 | 适配 cohort 字段（state 加 cohort、memory 加 cohort 隔离） |
+
+**适配成本：~5,400 LOC，~3–4 turns。**
+
+### 4.3 模式复用（结构借鉴，重写实现）
+
+| 来源 | 用途 |
+|---|---|
+| `etfagents/graph/etf_graph.py`（LangGraph 装配） | MOSAIC 4-layer LangGraph.js 装配 |
+| `etfagents/agents/utils/structured.py`（structured output + free-text fallback） | 每个 MOSAIC agent 的 schema 输出 |
+| `etfagents/agents/utils/analysis_memory.py` | scorecard + Darwinian 数据存储模式 |
+
+---
+
+## 5. 25 个 Agent 详细设计
+
+> 每个 agent 必须有：(a) 中英双语 prompt（外部 .md 文件 + TS 加载）；
+> (b) `AnalystReportSpec`；(c) tool 列表 + `unexecuted_tool_recovery` 配置；
+> (d) Zod structured output schema。
+
+### 5.1 Layer 1 — Macro（10 个）
+
+| ID | 中文名 | 主要工具 (RPC tools.call) | Structured 输出 schema | Prompt 关键约束 |
+|---|---|---|---|---|
+| `central_bank` | 央行 | `get_pboc_ops`、`get_fred_series(FEDFUNDS,DFF)`、`get_yield_curve_cn` | `{stance, key_rate_change_bps, qe_qt_balance_change, next_window}` | 必须双央行联动判断；引用具体 BPS / 余额变动 |
+| `geopolitical` | 地缘 | `get_global_news(geopolitical)`、`get_us_china_relations` | `{escalation_level: 1-5, hot_zones, trade_impact}` | 必须给具体事件 + 时间窗口 |
+| `china` | 中国本土 | `get_pboc_ops`、`get_industry_policy`、`get_property_data` | `{policy_direction, sector_focus, risk_drivers}` | 关注产业政策窗口 + 房地产 + 消费 |
+| `dollar` | 美元 | `get_fred_series(DTWEXBGS)`、`get_usdcny`、`get_north_capital_flow` | `{dxy_trend, cny_pressure, north_flow_correlation}` | 必须三角分析 DXY/CNY/北向 |
+| `yield_curve` | 收益率曲线 | `get_yield_curve_cn`、`get_fred_series(DGS10,DGS2)`、`get_us_china_spread` | `{curve_shape, recession_signal, cn_us_spread_bps}` | 必须给中美利差具体值 |
+| `commodities` | 商品 | `get_commodity_prices`、`get_fred_series(DCOILWTICO,GOLDPMGBD228NLBM)` | `{oil_regime, metals_regime, ag_regime, china_demand_signal}` | 区分能源/金属/农产品 |
+| `volatility` | 波动率 | `get_ivx`、`get_fred_series(VIXCLS)`、`get_etf_indicator(510050.SH)` | `{vix_regime, ivx_regime, regime_filter}` | 必须计算 VIX/iVX 比值 |
+| `emerging_markets` | 新兴市场 | `get_etf_price_data(EEM)`、`get_etf_price_data(2800.HK)` | `{em_relative, hk_a_share_ratio, capital_flow}` | 关注港 A 比价 |
+| `news_sentiment` | 新闻情绪 | `get_xueqiu_heat`、`get_news`、`get_caixin_sentiment` | `{retail_sentiment_score: -1 to 1, hot_topics, contrarian_flag}` | 量化雪球热度 |
+| `institutional_flow` | 机构资金 | `get_north_capital_flow`、`get_lhb_ranking`、`get_fund_flow` | `{north_net_flow_cny, top_buyers, sectors_in_out}` | 必须给具体净流入/流出金额 |
+
+**Layer 1 输出聚合 → `RegimeSignal { stance: BULLISH/BEARISH/NEUTRAL,
+confidence: 0-1, key_drivers, layer_1_consensus_score }`**（10 个 agent 共识打分）
+
+### 5.2 Layer 2 — Sector（7 个，申万一级映射）
+
+| ID | 申万一级映射 | 主要工具 | Output schema |
+|---|---|---|---|
+| `semiconductor` | 电子（半导体子板） | `get_etf_holdings(159995.SZ 半导体)`、`get_industry_research`、`get_north_capital_flow(by_sector)` | `{longs: [tickers w/ thesis], shorts, sector_score}` |
+| `energy` | 石油石化 + 煤炭 + 公用事业 | `get_etf_holdings(516660.SH 石化)`、`get_commodity_prices` | 同上 |
+| `biotech` | 医药生物 | `get_etf_holdings(512010.SH)`、`get_industry_research` | 同上 |
+| `consumer` | 食饮 + 家电 + 美护 | `get_etf_holdings(159928.SZ 消费)` | 同上 |
+| `industrials` | 机械 + 军工 + 交运 | `get_etf_holdings(512660.SH 军工)` | 同上 |
+| `financials` | 银行 + 非银 | `get_etf_holdings(512800.SH 银行)` | 同上 |
+| `relationship_mapper` | 跨行业（产业链/股东网络） | `get_top_holdings_overlap`、`get_related_party_transactions` | `{supply_chains, ownership_clusters, contagion_risks}` |
+
+### 5.3 Layer 3 — Superinvestor（4 位 US 哲学家保留）
+
+| ID | 哲学 | A 股应用 prompt 关键 |
+|---|---|---|
+| `druckenmiller` | 宏观/动量 | "What's the most asymmetric trade in A-share right now? Identify sector rotation + policy catalyst pairs. Concentrate on regime-driven 3-5 names." |
+| `aschenbrenner` | AI/算力周期 | "Who benefits from China's AI capex cycle vs US export controls? Map domestic compute (华为链/寒武纪/海光) + AI 应用 (科大讯飞/360)." |
+| `baker` | 深度科技/生物 IP | "Which A-share names have real IP moats? Focus on 创新药 / 罕见病 / 国产替代 with patent strength + clinical pipeline." |
+| `ackman` | Quality Compounder | "Find pricing power + FCF + catalyst trio. White liquor + appliances + branded consumer dominate. Quality > price for 5+ year hold." |
+
+### 5.4 Layer 4 — Decision（4 个）
+
+| ID | 角色 | 输入 | 输出 |
+|---|---|---|---|
+| `cro` | 对抗风控 | Layer 1+2+3 全部输出 | `{rejected_picks: [{ticker, reason}], correlated_risks, black_swan_scenarios}` |
+| `alpha_discovery` | 找遗漏 | Layer 1+2+3 全部输出 | `{novel_picks: [{ticker, why_missed_by_others}]}` |
+| `autonomous_execution` | 信号→仓位 | Layer 3 picks + Layer 4 cro/alpha + Darwinian weights | `{trades: [{ticker, action, size_pct, conviction}]}` |
+| `cio` | 最终决策 | 全部上层输出 + Darwinian weights + JANUS regime | `{portfolio_actions: [{ticker, action, target_weight, holding_period, dissent_notes}]}` |
+
+---
+
+## 6. RPC 方法清单
+
+### 6.1 复用 ETFAgents（21 个）
+直接保留：
+- `tools.list` / `tools.call`
+- `config.{default, get, set}`
+- `cache.{stats, cleanup, clear, details}`
+- `paper.{register, login, logout, current_user, get_account, reset_account, buy, sell, get_positions, get_trades, suggest_order_from_signal}`
+- `backtest.run_candidate_pool`
+
+### 6.2 新增（约 27 个）
+
+```
+# Scorecard
+scorecard.record_recommendation(agent, ticker, action, conviction, date, cohort)
+scorecard.score_pending(date)              # 给所有 5/21 天到期的推荐评分
+scorecard.get_weights(cohort?)             # 当前 Darwinian 权重
+scorecard.get_history(agent, cohort, days?)
+scorecard.get_sharpe(agent, cohort, window=30)
+
+# Autoresearch
+autoresearch.trigger(cohort?, force_agent?)
+autoresearch.evaluate_pending()
+autoresearch.get_log(cohort?, days?)
+autoresearch.list_active_branches()
+autoresearch.revert_modification(modification_id)
+
+# PRISM
+prism.list_cohorts()
+prism.train_cohort(cohort_name, start_date?, end_date?, dry_run?)
+prism.cohort_status(cohort_name)
+prism.compare_cohorts(metric=sharpe, since_date)
+
+# JANUS
+janus.blend_today(date, cohort_outputs)
+janus.regime_signal(window_days=30)
+janus.update_weights()
+janus.get_history(days?)
+
+# MiroFish
+mirofish.generate(date, scenario_count=5, days_ahead=30)
+mirofish.simulate(scenario_id)
+mirofish.score(scenario_id, actual_outcomes)
+mirofish.get_context(date)
+mirofish.train_on_scenarios(agent, scenarios)
+
+# Prompts (autoresearch 写入对象)
+prompts.read(agent, cohort, lang)
+prompts.write(agent, cohort, lang, content, branch?)
+```
+
+---
+
+## 7. SQLite Schemas
+
+```sql
+-- ============== scorecard ==============
+CREATE TABLE recommendations (
+  id INTEGER PRIMARY KEY,
+  cohort TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  ticker TEXT NOT NULL,
+  date DATE NOT NULL,
+  action TEXT NOT NULL,                      -- BUY/SELL/HOLD/...
+  conviction REAL,
+  target_weight_pct REAL,
+  rationale_snapshot TEXT,
+  forward_return_5d REAL,                    -- NULL until scored
+  forward_return_21d REAL,
+  alpha_5d REAL,                             -- 相对基准
+  scored_at DATETIME,
+  UNIQUE(cohort, agent, ticker, date)
+);
+CREATE INDEX idx_rec_pending ON recommendations(scored_at) WHERE scored_at IS NULL;
+
+CREATE TABLE darwinian_weights (
+  id INTEGER PRIMARY KEY,
+  cohort TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  date DATE NOT NULL,
+  weight REAL CHECK (weight >= 0.3 AND weight <= 2.5),
+  rolling_sharpe_30 REAL,
+  rolling_sharpe_90 REAL,
+  quartile INTEGER,
+  UNIQUE(cohort, agent, date)
+);
+
+-- ============== autoresearch ==============
+CREATE TABLE prompt_versions (
+  id INTEGER PRIMARY KEY,
+  cohort TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  branch_name TEXT NOT NULL,                 -- e.g. cohort/euphoria_2021/auto/cro/2024-01-15
+  base_commit_hash TEXT NOT NULL,
+  modification_commit_hash TEXT NOT NULL,
+  modification_summary TEXT,                 -- LLM 生成的修改说明
+  created_at DATETIME NOT NULL,
+  status TEXT NOT NULL,                      -- pending/keep/revert
+  decided_at DATETIME,
+  pre_sharpe REAL,
+  post_sharpe REAL,
+  delta_sharpe REAL
+);
+CREATE INDEX idx_pv_pending ON prompt_versions(status, created_at) WHERE status = 'pending';
+
+CREATE TABLE autoresearch_log (
+  id INTEGER PRIMARY KEY,
+  prompt_version_id INTEGER REFERENCES prompt_versions(id),
+  event TEXT NOT NULL,                       -- triggered/mutated/evaluated/kept/reverted
+  detail TEXT,
+  created_at DATETIME NOT NULL
+);
+
+-- ============== cohort ==============
+CREATE TABLE cohort_runs (
+  id INTEGER PRIMARY KEY,
+  cohort TEXT NOT NULL,
+  date DATE NOT NULL,
+  cycle_started_at DATETIME,
+  cycle_completed_at DATETIME,
+  llm_calls INTEGER,
+  llm_cost_usd REAL,
+  cio_action TEXT,
+  cio_target_weight REAL,
+  notes TEXT,
+  UNIQUE(cohort, date)
+);
+
+-- ============== janus ==============
+CREATE TABLE janus_history (
+  id INTEGER PRIMARY KEY,
+  date DATE NOT NULL UNIQUE,
+  cohort_weights JSON,                       -- { "bull_2007": 0.3, "crisis_2008": 0.5, ... }
+  regime TEXT,                               -- NOVEL/HISTORICAL/MIXED
+  blended_actions JSON
+);
+```
+
+**存储位置**：`<repo>/data/mosaic.db`（受 `MOSAIC_DATA_DIR` env 控制；默认在
+项目根 data/ 下）。autoresearch 数据每天 backup 到 `data/backups/` 防止误删。
+
+---
+
+## 8. Git Autoresearch 分支策略
+
+```
+main                                            ← cohort_default 初始 prompt（手写）
+├── cohort/bull_2007/main                       ← cohort 演化 trunk
+│   ├── cohort/bull_2007/auto/cro/2024-01-15   ← 单次 modification feature branch
+│   ├── cohort/bull_2007/auto/cio/2024-01-22
+│   └── ...
+├── cohort/crisis_2008/main
+├── cohort/bull_2016/main
+├── cohort/crisis_covid/main
+├── cohort/recovery_2020/main
+├── cohort/euphoria_2021/main                   ← 启动 cohort
+└── cohort/rate_tightening/main
+```
+
+### 协议
+
+1. autoresearch trigger → 在 `cohort/<name>/main` 上创建 feature branch
+2. 修改单个 agent prompt 文件 → commit
+3. SQLite 记录 `prompt_versions(status=pending)`
+4. 5 个交易日后 evaluate：
+   - **keep** → fast-forward merge feature → `cohort/<name>/main`，删 feature branch
+   - **revert** → 删 feature branch（不影响主线）
+5. 周期性 rebase main 到所有 cohort 主线（仅在用户手动触发"upgrade base prompts"时）
+
+### 约束（用户已同意）
+
+- 同一 agent **24 小时内最多 1 次新 mutation**
+- **3 天内不能撤销 keep 的 mutation**（即不能立刻 revert 一个刚 merge 的 commit）
+- Keep 阈值：**Δ Sharpe > 0.1**（不只是 > 0），避免微小波动触发 keep
+- 月度修改次数上限：每 cohort × 25 agent 总和不超过 100 次/月
+
+---
+
+## 9. 7 个 Cohort 时段配置
+
+```
+1. bull_2007        2006-01-04 → 2007-10-16    牛市顶 6124 ⭐ A 股本土
+2. crisis_2008      2007-10-17 → 2008-10-28    暴跌 70%，1664 见底 ⭐ A 股本土
+3. bull_2016        2016-01-29 → 2017-12-29    慢牛 + 白酒
+4. crisis_covid     2018-10-19 → 2020-03-23    贸易战 + 疫情合并
+5. recovery_2020    2020-03-24 → 2020-12-31    疫后宽松反弹
+6. euphoria_2021    2020-07-01 → 2021-02-18    茅指数高峰（启动 cohort）
+7. rate_tightening  2022-04-01 → 2023-12-31    中特估 + 量化退潮 + Fed 加息
+```
+
+**启动顺序**：先 **euphoria_2021**（数据深度好 + 风格鲜明）打通 Phase 2-4
+全套，验证后 Phase 5 展开剩余 6 cohort。
+
+---
+
+## 10. 双语 Prompt 结构
+
+### 10.1 文件布局
+
+```
+prompts/mosaic/
+├── README.md                                      # 各 cohort 训练状态/进度
+├── cohort_default/                                # 初始 prompt（未训练）
+│   ├── macro/
+│   │   ├── central_bank.zh.md
+│   │   ├── central_bank.en.md
+│   │   └── ... (10 × 2)
+│   ├── sector/ (7 × 2)
+│   ├── superinvestor/ (4 × 2)
+│   └── decision/ (4 × 2)
+├── cohort_bull_2007/
+├── cohort_crisis_2008/
+├── cohort_bull_2016/
+├── cohort_crisis_covid/
+├── cohort_recovery_2020/
+├── cohort_euphoria_2021/
+└── cohort_rate_tightening/
+```
+
+### 10.2 TS 端 builder
+
+每个 agent 一个 `.ts` 文件，构造函数接收 `language: "Chinese" | "English" | "Bilingual"`：
+
+```ts
+export function buildCentralBankSystemMessage(ctx: PromptContext): string {
+  const ROLE_ZH = await loadPrompt("central_bank", ctx.cohort, "zh");
+  const ROLE_EN = await loadPrompt("central_bank", ctx.cohort, "en");
+
+  if (ctx.outputLanguage === "Bilingual") {
+    return `${ROLE_ZH}\n\n---\n\n${ROLE_EN}\n\n${SHARED_RULES}`;
+  }
+  return ctx.outputLanguage === "Chinese" ? ROLE_ZH : ROLE_EN;
+}
+```
+
+### 10.3 切换方式
+
+- **CLI**：`--lang zh` / `--lang en` / `--lang bilingual`
+- **TUI**：`Ctrl+L` 动态切换
+- **默认**：`Chinese`
+
+外部 markdown 文件是 autoresearch mutation 的对象（Python 端
+`read_prompt_file(agent, cohort, lang)` 读取，TS 通过 RPC `prompts.read`
+拉取）。
+
+---
+
+## 11. Phase 0 详细任务（Day 1-5）
+
+### Day 1：Bridge 骨架 ✅ 2026-05-28
+- [x] 0.1.1 创建 `mosaic/` Python 包骨架
+- [x] 0.1.2 复制 `etfagents/__init__.py` + `default_config.py` → `mosaic/`，改名
+      （并将默认 LLM 切到 `anthropic` + `output_language=Chinese`，新增 cohorts 表 +
+      autoresearch 约束块）
+- [x] 0.1.3 复制 `etfagents/bridge/` 全部 → `mosaic/bridge/`（5 文件 + handlers/ 子包，
+      `etfagents` → `mosaic` 改名）
+- [x] 0.1.4 改 `mosaic/bridge/handlers/__init__.py` 的 import 路径；所有跨包 import
+      改为 lazy + 在 `ImportError` 时返回友好的 `CONFIG_ERROR / PAPER_ERROR /
+      BACKTEST_ERROR` + 阶段提示，让后续 Phase 增量 land 时不破坏 bridge
+- [x] 0.1.5 跑 `python -m mosaic.bridge` 验证：
+      * 21 个方法注册成功（`tools.{list,call}` + `config.{default,get,set}` +
+        `cache.{stats,cleanup,clear,details}` + `paper.*`(11) + `backtest.run_candidate_pool`）
+      * `tools.list` → `[]`（Day 4 才有 tool 模块）
+      * `config.default` → 完整配置（含 7 cohorts + autoresearch 约束）
+      * 未知方法 → `METHOD_NOT_FOUND`
+      * 无效 JSON → `PARSE_ERROR`
+      * `cache.stats` → `CONFIG_ERROR` 带 "Phase 0 Day 2" 阶段提示
+
+**Day 1 产出**：
+- `MOSAIC-Agents/.gitignore` `.env.example` `pyproject.toml` `README.md`
+- `MOSAIC-Agents/mosaic/__init__.py` `default_config.py`
+- `MOSAIC-Agents/mosaic/bridge/{__init__,__main__,server,protocol,registry}.py`
+- `MOSAIC-Agents/mosaic/bridge/handlers/{__init__,tools,config,cache,paper,backtest}.py`
+- `.venv/` 已建（Python 3.11.15 via uv），`langchain-core==1.4.0` + `python-dotenv==1.2.2` 已安装
+
+**Day 1 → Day 2 待办**：移植 `etfagents/dataflows/`（除 `fred/macro_data` 外）+
+`cache_manager.py` + 新写 `mosaic/dataflows/fred.py`。届时 `config.get/set` /
+`cache.*` 全部从 `CONFIG_ERROR` 转为正常工作。
+
+### Day 2：FRED + dataflows
+- [ ] 0.2.1 复制 `etfagents/dataflows/` 全部（除 fred/macro_data 外）
+- [ ] 0.2.2 复制 `etfagents/cache_manager.py`
+- [ ] 0.2.3 新写 `mosaic/dataflows/fred.py`（~250 LOC）：
+  - `load_dotenv` 读 `FRED_API_KEY`（免费注册 https://fredaccount.stlouisfed.org/apikey）
+  - `get_series(series_id, start, end)` 返回 pandas DataFrame
+  - 限速 120 req/min，本地缓存
+  - 测试拉取 `FEDFUNDS` / `DGS10` / `DTWEXBGS` / `VIXCLS`
+- [ ] 0.2.4 改 `mosaic/dataflows/interface.py` 加 FRED 路由
+- [ ] 0.2.5 写 `tests/test_fred.py`
+
+### Day 3：Macro data 接口
+- [ ] 0.3.1 写 `mosaic/dataflows/macro_data.py`（~400 LOC）：
+  - `get_pboc_ops(curr_date)` 央行公开市场操作（Tushare cb_op）
+  - `get_north_capital_flow(date_range)` 沪/深股通净买入（Tushare moneyflow_hsgt）
+  - `get_lhb_ranking(date)` 龙虎榜（Tushare top_list）
+  - `get_yield_curve_cn(date)` 中国国债曲线（Tushare yc_cb）
+  - `get_us_china_spread(date)` 中美 10Y 利差
+  - `get_xueqiu_heat(ticker)` 雪球热度（akshare）
+  - `get_industry_policy(date)` 政策公告（Tushare anns_d）
+- [ ] 0.3.2 写 `tests/test_macro_data.py` 覆盖每个函数
+
+### Day 4：Macro tools 包装
+- [ ] 0.4.1 写 `mosaic/agents/utils/macro_tools.py`：
+  - 10 个 `@tool`-decorated 函数包装 `macro_data.py`
+  - 每个 tool 必须有 docstring + `Annotated` 参数描述
+  - 沿用 `etfagents/agents/utils/*_tools.py` 模式
+- [ ] 0.4.2 验证 bridge `tools.list` 自动发现这 10 个新 tool（通过
+  `_TOOL_MODULES` 加新路径）
+- [ ] 0.4.3 写 `tests/test_macro_tools.py`
+
+### Day 5：Bridge 集成测试
+- [ ] 0.5.1 复制 `etfagents/tests/test_bridge_protocol.py` 模板，
+  适配 mosaic 包名（14 个 ETFAgents 通用测试 + 5 个新增 macro tool 测试）
+- [ ] 0.5.2 端到端 smoke test：spawn `python -m mosaic.bridge`，
+  发送 `tools.call(get_north_capital_flow, ...)` 收到真实北向数据 CSV
+- [ ] 0.5.3 Phase 0 完成确认：
+  - 更新本文档 §3 中 Phase 0 状态为 ✅ + 完成时戳
+  - `git commit "Phase 0: Python sidecar + macro data layer"`
+  - Phase 0 不涉及 LLM 调用，**$0 LLM 成本**
+
+---
+
+## 12. 风险登记
+
+| 风险 | 影响 | 缓解 |
+|---|---|---|
+| Tushare API 配额 / 限速 | 训练阶段大批量调用可能触发限速 | 加缓存层（已在 ETFAgents 复用 cache_manager） + 升级订阅档 |
+| LLM 成本失控 | autoresearch + PRISM 全跑可能失控 | 默认开发期用本地 Lemonade Qwen；生产前估算每个 phase 的预算并设上限 |
+| Prompt mutation 越改越差 | autoresearch 错误生成的修改可能让 agent 越改越差 | 5 天 keep 阈值用 Δ Sharpe > 0.1；每月修改次数上限；保留 git history 可回溯 |
+| A 股 cohort 时段映射错误 | A 股的"crisis"和 US 不同 | Phase 5 启动前先论证每个 cohort 的 A 股代表时段（如 2008 全球危机 / 2018 资管新规 / 2020 Q1 疫情） |
+| US Superinvestor 跨市场失效 | US 投资人哲学应用到 A 股可能不准 | Phase 2 末做 superinvestor 端到端验证；如果质量明显差，回头补 4 位 CN 投资人组成 8 哲学（fallback 到 Q4=c） |
+| MiroFish 反身性闭环过强 | 模拟未来产生的训练数据可能让 agent 过拟合极端情景 | 与真实 forward returns 校验（Phase 7 子步 7.5） |
+| LangGraph.js v1 在 25 节点图上的稳定性 | 节点数量翻倍，内存/检查点行为未知 | Phase 2 子步 2.6 做 stress test：mock LLM × 25 节点 × 10 次 daily cycle |
+| Anthropic API 限速 | 25 节点并行可能触发限速 | 节点级 retry + 限流；layer 内并行控制（如 layer 1 一次 5 个并行） |
+| Cohort 间 prompt 版本管理混乱 | 5 cohorts × 25 agents × 多次修改 = 125+ branch | 严格 branch 命名 `cohort/{name}/auto/{agent}/{date}` + SQLite 索引 |
+| MiroFish 数据源切换 | seed_generator 5 个数据采集函数全替换为 Tushare/akshare | Phase 7 子步 7.2 单独处理，与 ATLAS 公开版完全隔离测试 |
+
+---
+
+## 13. 数据/LLM 预算估算
+
+### 13.1 Tushare 订阅
+- **免费档**：基础日线 + 部分财务，限速 200 次/分钟。MVP 阶段可用
+- **2,000 积分档**（约 ¥200/年）：覆盖大部分需求 + 北向资金 + 龙虎榜
+- **5,000 积分档**（约 ¥500/年）：覆盖期权 / 期货 / 全部高级数据
+- **建议**：Phase 0–4 用免费档；Phase 5 PRISM 训练前升级到 2,000 档
+
+### 13.2 FRED
+- 完全免费，限速 120 次/分钟，几乎不用担心
+
+### 13.3 LLM API 估算（Anthropic Claude Sonnet）
+- 单 daily cycle：25 agents × 平均 8K tokens（含工具结果）≈ 200K tokens
+- Sonnet 输入 $3/MTok，输出 $15/MTok，平均 **$0.005/cycle agent ≈ $0.125/daily cycle**
+- **Phase 2 MVP** 单天：$0.125
+- **Phase 4 autoresearch**：每天额外 1–3 次 prompt mutation = +$0.05/天
+- **Phase 5 PRISM**：7 cohorts × 200 trading days × $0.18/day ≈ **$252**
+- **Phase 7 MiroFish 训练**：~5,000 模拟 + 训练调用 ≈ **$50**
+- **Phase 8 18 个月回测**：378 天 × $0.18 ≈ **$70**
+- **总 Phase 1–9 预算**：约 **$370–570 美元** 的 Anthropic 调用，分阶段花费
+- **降本方案**：开发期用本地 Lemonade Qwen 跑全流程，仅生产 PRISM 训练用 Anthropic
+- **DeepSeek**：约 1/10 价格，质量略差但中文上下文好。Phase 5 训练首选
+
+### 13.4 存储
+- SQLite：scorecard / autoresearch_log / prompt_versions ≈ 几百 MB
+- Git repo：7 cohorts × 25 agents × 多次修改 ≈ 几十 MB
+- MiroFish 场景缓存：~100 MB
+- Tushare 缓存：~1 GB（18 个月行情 + 财务）
+
+---
+
+## 14. 待决议题（Phase 进展中收敛）
+
+1. **A 股 cohort 时段精细化**：每个 cohort 起止日期已初步定（§9），但
+   `crisis_covid` 合并 2018 Q4 + 2020 Q1 是否合理？或拆成两段？Phase 5 启
+   动前必须确认。
+
+2. **PRISM 启动顺序**：建议先跑 1 cohort（`euphoria_2021`）打通
+   Phase 2-4 全套，再展开 PRISM。Phase 4 完成后回头确认。
+
+3. **autoresearch 触发频率**：Phase 4 单 cohort 默认每天 1 次；
+   Phase 5 多 cohort 时改为每个 cohort 每天 1 次（避免 7 cohort × 多
+   mutation 风暴）。
+
+4. **prompt 多样性约束**：同一 agent 24 小时内最多 1 次修改，3 天内不能撤销
+   keep 的修改（已同意）；月度修改次数上限设多少？建议每 cohort × 25 agent
+   总和不超过 100 次/月。
+
+5. **TS UI 中文化程度**：CLI 输出中文报告（默认），CLI help/选项保持英文
+   （开发者友好）。**TUI 标签可双语并列**（中文为主，括号标英文）。
+
+6. **是否需要 MiroFish A 股事件库**？ATLAS 公开 MiroFish 用 US 事件
+   （Fed 决议 / 财报季 / 地缘冲突）。A 股需要本地化（业绩季 / 解禁 / 政策窗
+   口 / 财报集中披露 / 春节假期）。Phase 7 启动前定。
+
+---
+
+## 15. 工作流约定（沿用 ETFAgents）
+
+每个子任务完成后：
+1. `pnpm typecheck` clean
+2. `pnpm lint`（biome）clean
+3. `pnpm test` 全绿
+4. `python -m unittest discover -s tests -q` 全绿
+5. 更新本文档对应章节状态 + 完成时戳
+6. 在用户能验证的 checkpoint 处暂停
+
+**何时端到端**：每完成一个 Phase 末做一次 `mosaic-cycle` 真实跑（用最便宜
+的 LLM 配置），观察输出是否相对上次有可见改进；记录 LLM 凭证依赖（Anthropic
+API key、TUSHARE_TOKEN、本地 Lemonade 端点）的最低运行要求。
+
+---
+
+## 16. 当前里程碑（写于 2026-05-28）
+
+**已完成**：仅本计划文档。
+
+**下一步**：用户已确认本计划 → 进入 Phase 0 Day 1（Python sidecar 搭建）。
+
+### 16.1 仓库布局（采用方案 A：MOSAIC-Agents 独立仓）
+
+MOSAIC 项目代码全部落地到独立 GitHub 仓库
+**`git@github.com:haphap/MOSAIC-Agents.git`**，本地路径
+`/home/hap/Projects/MOSAIC-Agents/`。`atlas-gic/` 与 `ETFAgents/`
+保留为只读参考。
+
+**只读参考目录**（不在 MOSAIC 仓内，仅提供素材）：
+
+```
+/home/hap/Projects/atlas-gic/                # ATLAS 公开版（参考）
+├── README.md / CLAUDE.md / LICENSE           # ATLAS 公开材料
+├── architecture/ prompts/ results/           # ATLAS 公开架构 + prompt 模板 + 回测
+├── src/                                      # ATLAS 公开 src/janus.py + src/mirofish/（Phase 6/7 移植源）
+└── mosaic-tsplan.md                          # ⭐ 本文档（保留为只读副本，工作主文档已迁至 MOSAIC-Agents/）
+
+/home/hap/Projects/ETFAgents/                # ETFAgents 已完成项目（复用源）
+├── etfagents/                                # bridge/cache/dataflows/paper_trading/backtest 复制源
+├── ts/                                       # mosaic-ts 前端复制源
+└── tests/                                    # 测试模板复制源
+```
+
+**MOSAIC-Agents/ 当前布局**：
+
+```
+/home/hap/Projects/MOSAIC-Agents/             # 项目根（GitHub: haphap/MOSAIC-Agents）
+└── .git/                                     # 已 clone，远程 = origin
+```
+
+**MOSAIC-Agents/ 目标布局**（Phase 0–9 累计创建）：
+
+```
+/home/hap/Projects/MOSAIC-Agents/
+├── mosaic-tsplan.md           # ⭐ 工作主文档（每个 sub-step 完成后更新）
+├── README.md                  # MOSAIC 项目 README（Phase 9 完成）
+├── LICENSE                    # MOSAIC 自有 LICENSE
+├── pyproject.toml             # Python 包定义（Phase 0 Day 1 创建）
+├── .env.example               # 环境变量模板（Phase 0 Day 2）
+├── .gitignore                 # 标准 Python + Node 忽略
+├── mosaic/                    # Phase 0+ Python sidecar
+│   ├── __init__.py
+│   ├── default_config.py
+│   ├── bridge/                # JSON-RPC stdio sidecar
+│   ├── dataflows/             # Phase 0 Day 2-3
+│   ├── cache_manager.py       # Phase 0 Day 2
+│   ├── agents/utils/          # Phase 0 Day 4 + Phase 2+
+│   ├── paper_trading/         # Phase 8 移植
+│   ├── backtest/              # Phase 8 移植
+│   ├── prism/                 # Phase 5
+│   ├── janus.py               # Phase 6 移植 ATLAS
+│   └── mirofish/              # Phase 7 移植 ATLAS
+├── mosaic-ts/                 # Phase 1+ TypeScript 前端
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── src/
+│   │   ├── bridge/            # Phase 1 复制 ETFAgents
+│   │   ├── llm/               # Phase 1
+│   │   ├── agents/            # Phase 2+ (4 layer × 25 agents)
+│   │   ├── cli/               # Phase 9
+│   │   └── tui/               # Phase 9
+│   └── test/
+├── prompts/mosaic/            # Phase 2+ Cohort prompt 仓库（autoresearch git 修改对象）
+│   ├── cohort_default/
+│   └── cohort_<name>/         # 7 个 cohort × 25 agent × 双语
+├── data/                      # Phase 3+ SQLite + 缓存（受 MOSAIC_DATA_DIR 控制；默认 .gitignore）
+│   ├── mosaic.db
+│   ├── cache/
+│   └── backups/
+├── docs/                      # Phase 9 用户文档
+├── scripts/                   # 辅助脚本（数据回填 / 训练编排 / cohort 切换）
+└── tests/                     # Python 测试（TS 测试在 mosaic-ts/test/）
+```
+
+### 16.2 工作主文档约定
+
+- `MOSAIC-Agents/mosaic-tsplan.md` = **工作主文档**（每个 sub-step 完成后更新此处）
+- `atlas-gic/mosaic-tsplan.md` = **只读初始副本**（保留作为方案制定时的快照，不再更新）
+- 状态符号：⏭ 待开始 / 🟡 进行中 / ✅ 已完成（YYYY-MM-DD）/ ❌ 阻塞（原因）
+
+---
+
+## 17. 总估算
+
+| 维度 | 估算 |
+|---|---|
+| Phase turns 总数 | 50–58 turns |
+| TS 新增代码 | ~10,000 LOC（其中 ~3,000 直接复用 ETFAgents） |
+| Python 新增代码 | ~15,000 LOC（其中 ~5,000 直接复用 ETFAgents + ATLAS 公开） |
+| 测试代码 | ~6,000 LOC |
+| 全程 LLM 成本 | $370–570 美元（Anthropic）或更低（DeepSeek/本地 Lemonade） |
+| Tushare 订阅 | 0–500 元/年 |
+| 业余推进时间 | 6.5–9.5 个月 |
+
+---

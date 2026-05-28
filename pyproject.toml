@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mosaic"
+version = "0.1.0.dev0"
+description = "MOSAIC: A-share self-improving multi-agent trading framework (ATLAS-inspired)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    # Phase 0 Day 1 — bridge skeleton only needs these
+    "langchain-core>=0.3.81",
+    "python-dotenv>=1.0.0",
+    # Phase 0 Day 2+ will add: pandas, requests, tushare, akshare, stockstats, ...
+    # Phase 1+ will add the rest of the ETFAgents deps + a few new ones
+]
+
+[project.optional-dependencies]
+# Day 2+ data layer
+data = [
+    "pandas>=2.3.0",
+    "requests>=2.32.4",
+    "tushare>=1.4.21",
+    "akshare>=1.16.0",
+    "stockstats>=0.6.5",
+    "yfinance>=0.2.63",
+    "pytz>=2025.2",
+]
+# Phase 8 paper / backtest
+trading = [
+    "backtrader>=1.9.78.123",
+    "bcrypt>=4.0",
+]
+# LLM providers (Phase 1+)
+llm = [
+    "langchain-anthropic>=0.3.15",
+    "langchain-openai>=0.3.23",
+    "langchain-google-genai>=4.0.0",
+    "langchain-experimental>=0.3.4",
+    "langgraph>=0.4.8",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+]
+# Test deps
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+all = [
+    "mosaic[data,trading,llm,test]",
+]
+
+[tool.setuptools.packages.find]
+include = ["mosaic*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,32 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Env / secrets
+.env
+.env.local
+
+# Editor / agent dirs
+.claude/
+.commandcode/
+.kiro/
+AGENTS.md
+
+# MOSAIC runtime artefacts (data + caches + autoresearch backups)
+data/
+!data/.gitkeep
+results/
+logs/
+
+# TypeScript workspace (Phase 1+)
+mosaic-ts/node_modules/
+mosaic-ts/dist/
+mosaic-ts/coverage/
+*.tsbuildinfo
