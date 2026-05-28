@@ -14,6 +14,15 @@ from .yfinance_news import get_news_yfinance, get_global_news_yfinance
 from .brave_news import get_news as get_brave_news, get_global_news as get_brave_global_news
 from .opencli_news import get_news as get_opencli_news, get_global_news as get_opencli_global_news
 from .fred import get_fred_series as get_fred_series_impl
+from .macro_data import (
+    get_pboc_ops as get_pboc_ops_impl,
+    get_north_capital_flow as get_north_capital_flow_impl,
+    get_lhb_ranking as get_lhb_ranking_impl,
+    get_yield_curve_cn as get_yield_curve_cn_impl,
+    get_us_china_spread as get_us_china_spread_impl,
+    get_xueqiu_heat as get_xueqiu_heat_impl,
+    get_industry_policy as get_industry_policy_impl,
+)
 from .tushare import (
     get_etf_daily as get_tushare_etf_daily,
     get_etf_holdings as get_tushare_etf_holdings,
@@ -104,12 +113,16 @@ TOOLS_CATEGORIES = {
         ]
     },
     "macro_data": {
-        "description": "Global macro time series (Fed, yield curves, FX, commodities, vol)",
+        "description": "Global macro time series (Fed, yield curves, FX, commodities, vol) + A-share macro/sentiment",
         "tools": [
             "get_fred_series",
-            # Phase 0 Day 3 will add: get_pboc_ops, get_north_capital_flow,
-            # get_lhb_ranking, get_yield_curve_cn, get_us_china_spread,
-            # get_xueqiu_heat, get_industry_policy
+            "get_pboc_ops",
+            "get_north_capital_flow",
+            "get_lhb_ranking",
+            "get_yield_curve_cn",
+            "get_us_china_spread",
+            "get_xueqiu_heat",
+            "get_industry_policy",
         ]
     }
 }
@@ -121,6 +134,7 @@ VENDOR_LIST = [
     "brave",
     "opencli",
     "fred",
+    "akshare",
 ]
 
 # Mapping of methods to their vendor-specific implementations
@@ -204,6 +218,28 @@ VENDOR_METHODS = {
     "get_fred_series": {
         "fred": get_fred_series_impl,
     },
+    "get_pboc_ops": {
+        "tushare": get_pboc_ops_impl,
+    },
+    "get_north_capital_flow": {
+        "tushare": get_north_capital_flow_impl,
+    },
+    "get_lhb_ranking": {
+        "tushare": get_lhb_ranking_impl,
+    },
+    "get_yield_curve_cn": {
+        "tushare": get_yield_curve_cn_impl,
+    },
+    "get_us_china_spread": {
+        "tushare": get_us_china_spread_impl,
+        "fred": get_us_china_spread_impl,        # composite — same callable; vendor key chooses fallback ordering
+    },
+    "get_xueqiu_heat": {
+        "akshare": get_xueqiu_heat_impl,
+    },
+    "get_industry_policy": {
+        "tushare": get_industry_policy_impl,
+    },
 }
 
 _RANGE_DATE_METHODS = {
@@ -213,6 +249,7 @@ _RANGE_DATE_METHODS = {
     "get_stock_research": (1, 2),
     "get_etf_price_data": (1, 2),
     "get_fred_series": (1, 2),
+    "get_north_capital_flow": (0, 1),
 }
 
 _CURRENT_DATE_METHODS = {
@@ -228,12 +265,19 @@ _CURRENT_DATE_METHODS = {
     "get_etf_holdings": 1,
     "get_etf_share": 1,
     "get_etf_universe": 0,
+    "get_pboc_ops": 0,
+    "get_lhb_ranking": 0,
+    "get_yield_curve_cn": 0,
+    "get_us_china_spread": 0,
+    "get_industry_policy": 0,
 }
 
 _UNBOUNDED_BACKTEST_METHODS = {
     "get_insider_transactions",
     "get_news",
     "get_global_news",
+    # Real-time only — no historical Xueqiu hot-search data available.
+    "get_xueqiu_heat",
 }
 
 def get_category_for_method(method: str) -> str:

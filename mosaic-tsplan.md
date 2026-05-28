@@ -77,7 +77,7 @@ Cohort 切换 UI（PRISM）                                       paper_trading/
 
 | Phase | 范围 | 估算 turns | 状态 |
 |---|---|---|---|
-| 0 | Python sidecar + bridge（Tushare/FRED + 10 macro tools） | 5–6 | 🟡 进行中（Day 1 ✅ + Day 2 ✅ 2026-05-28） |
+| 0 | Python sidecar + bridge（Tushare/FRED + 10 macro tools） | 5–6 | 🟡 进行中（Day 1+2+3 ✅ 2026-05-28） |
 | 1 | TS skeleton + bridge-client（直接复用 ETFAgents Phase 1） | 3–4 | ⏭ |
 | 2 | Daily cycle MVP：25 agents + 4 层 LangGraph.js（单 cohort） | 11–12 | ⏭ |
 | 3 | Scorecard + Darwinian 权重 | 4 | ⏭ |
@@ -512,16 +512,49 @@ export function buildCentralBankSystemMessage(ctx: PromptContext): string {
 届时安装 `[data]` extras（pandas + tushare + akshare + yfinance + stockstats + pytz）
 让 `mosaic.dataflows.interface` 端到端 import 通过。
 
-### Day 3：Macro data 接口
-- [ ] 0.3.1 写 `mosaic/dataflows/macro_data.py`（~400 LOC）：
-  - `get_pboc_ops(curr_date)` 央行公开市场操作（Tushare cb_op）
-  - `get_north_capital_flow(date_range)` 沪/深股通净买入（Tushare moneyflow_hsgt）
-  - `get_lhb_ranking(date)` 龙虎榜（Tushare top_list）
-  - `get_yield_curve_cn(date)` 中国国债曲线（Tushare yc_cb）
-  - `get_us_china_spread(date)` 中美 10Y 利差
-  - `get_xueqiu_heat(ticker)` 雪球热度（akshare）
-  - `get_industry_policy(date)` 政策公告（Tushare anns_d）
-- [ ] 0.3.2 写 `tests/test_macro_data.py` 覆盖每个函数
+### Day 3：Macro data 接口 ✅ 2026-05-28
+- [x] 0.3.1 写 `mosaic/dataflows/macro_data.py`（527 LOC）：
+  - `get_pboc_ops(curr_date, look_back_days=7)` 央行公开市场操作（Tushare `cb_op`）
+  - `get_north_capital_flow(start_date, end_date)` 沪/深股通净买入（Tushare `moneyflow_hsgt`）
+  - `get_lhb_ranking(curr_date)` 龙虎榜（Tushare `top_list`）
+  - `get_yield_curve_cn(curr_date, look_back_days=30)` 中国国债曲线（Tushare `yc_cb`，curve_type=0）
+  - `get_us_china_spread(curr_date, look_back_days=30)` 中美 10Y 利差（合成：FRED `DGS10` + Tushare `yc_cb` 10y，按日期 inner join，spread_bps = (us-cn)*100）
+  - `get_xueqiu_heat(ticker=None, top_n=30)` 雪球热度（AkShare `stock_hot_search_xq`，可按 ticker filter）
+  - `get_industry_policy(curr_date, look_back_days=7, keywords=...)` 政策公告（Tushare `news` + 政策关键词过滤；plan 里写的 `anns_d` 是公司公告，不是政策新闻，故走更高召回的 `news` + filter）
+
+  共享 helper：`_validate_iso_date`, `_to_tushare_date`, `_date_range_from_lookback`,
+  `_query_tushare`（lazy import 复用 `tushare._query_pro` 的 retry/backoff），
+  `_df_to_markdown_csv`（统一 CSV 输出，含空帧友好提示）。
+  所有 public 函数返 str（vendor 契约）；缺 token / bad input / endpoint 失败 → `DataVendorUnavailable`。
+
+- [x] 0.3.2 写 `tests/test_macro_data.py`（401 LOC）：
+  - 30 个测试，**28 passed + 2 skipped**（live integration 在 `TUSHARE_TOKEN` 缺失时跳过）
+  - 覆盖：shared helpers / 7 个函数 × {正常输出, 空帧, 输入校验, 失败回退}
+  - `_extract_cn_10y_yield` 同时支持 `curve_term` 和 `ts_code="10.0000.CB"` 两种 schema
+  - us_china_spread 测试合成路径（验证日期 inner join + bps 计算）+ 缺 FRED leg 失败路径
+  - Xueqiu 测试通过 monkeypatch `sys.modules['akshare']` stub，无需真装
+  - **当日全套 49 tests = 43 passed + 6 skipped**（FRED 4 + Tushare 2）
+
+- [x] 0.3.3（计划内顺带做）改 `mosaic/dataflows/interface.py` 加 macro_data 路由：
+  - `TOOLS_CATEGORIES["macro_data"].tools` 扩展为 8 个 (`get_fred_series` + 7 macro)
+  - `VENDOR_LIST` 加 `"akshare"`
+  - 7 个 macro 函数加进 `VENDOR_METHODS`（`get_us_china_spread` 同时挂 `tushare` + `fred` 共享 callable，因为它本身就是合成）
+  - 日期路由：`get_north_capital_flow` → `_RANGE_DATE_METHODS`；
+    `get_pboc_ops / get_lhb_ranking / get_yield_curve_cn / get_us_china_spread / get_industry_policy` →
+    `_CURRENT_DATE_METHODS`；`get_xueqiu_heat` → `_UNBOUNDED_BACKTEST_METHODS`（实时数据，回测期阻塞）
+  - `mosaic.dataflows.interface` 现共有 **26 个 VENDOR_METHODS** 跨 9 个 category
+
+**Day 3 → Day 4 待办**：写 `mosaic/agents/utils/macro_tools.py`（10 个 `@tool`-decorated 函数包装 macro_data + fred），把 `_TOOL_MODULES` 加到 `bridge/handlers/tools.py`。届时 `tools.list` 应返 ≥10 条，`tools.call(get_pboc_ops, ...)` 在线（需要 `TUSHARE_TOKEN`）能拉真实数据。
+
+**§14 新增议题**（来自 Day 3）：
+- Tushare 端点名 `cb_op` / `yc_cb` 与 plan §11 文字对齐，但**未实弹验证**。Day 5
+  端到端测试时若发现实际名为 `cb_open_op` / 类似变体，仅需改 `macro_data.py`
+  调用点（VENDOR_METHODS / 测试 mock 自动生效，因为 mock 替换的是
+  `_query_pro`，与 endpoint 名解耦）。
+- `get_industry_policy` 走 `news` + 关键词过滤；plan §11 文字写 `anns_d`，但
+  `anns_d` 在 Tushare 实为公司公告（issuer-level filings）。这是设计偏离 plan
+  的地方，已在函数 docstring 里记录。Day 5 验证后若发现存在更精确的 "政策新闻"
+  endpoint（如 `cctv_news` 联播专题），可以在不破坏接口的前提下迁移过去。
 
 ### Day 4：Macro tools 包装
 - [ ] 0.4.1 写 `mosaic/agents/utils/macro_tools.py`：
