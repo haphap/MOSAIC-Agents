@@ -77,7 +77,7 @@ Cohort 切换 UI（PRISM）                                       paper_trading/
 
 | Phase | 范围 | 估算 turns | 状态 |
 |---|---|---|---|
-| 0 | Python sidecar + bridge（Tushare/FRED + 10 macro tools） | 5–6 | 🟡 进行中（Day 1 ✅ 2026-05-28） |
+| 0 | Python sidecar + bridge（Tushare/FRED + 10 macro tools） | 5–6 | 🟡 进行中（Day 1 ✅ + Day 2 ✅ 2026-05-28） |
 | 1 | TS skeleton + bridge-client（直接复用 ETFAgents Phase 1） | 3–4 | ⏭ |
 | 2 | Daily cycle MVP：25 agents + 4 层 LangGraph.js（单 cohort） | 11–12 | ⏭ |
 | 3 | Scorecard + Darwinian 权重 | 4 | ⏭ |
@@ -471,16 +471,46 @@ export function buildCentralBankSystemMessage(ctx: PromptContext): string {
 `cache_manager.py` + 新写 `mosaic/dataflows/fred.py`。届时 `config.get/set` /
 `cache.*` 全部从 `CONFIG_ERROR` 转为正常工作。
 
-### Day 2：FRED + dataflows
-- [ ] 0.2.1 复制 `etfagents/dataflows/` 全部（除 fred/macro_data 外）
-- [ ] 0.2.2 复制 `etfagents/cache_manager.py`
-- [ ] 0.2.3 新写 `mosaic/dataflows/fred.py`（~250 LOC）：
-  - `load_dotenv` 读 `FRED_API_KEY`（免费注册 https://fredaccount.stlouisfed.org/apikey）
-  - `get_series(series_id, start, end)` 返回 pandas DataFrame
-  - 限速 120 req/min，本地缓存
-  - 测试拉取 `FEDFUNDS` / `DGS10` / `DTWEXBGS` / `VIXCLS`
-- [ ] 0.2.4 改 `mosaic/dataflows/interface.py` 加 FRED 路由
-- [ ] 0.2.5 写 `tests/test_fred.py`
+### Day 2：FRED + dataflows ✅ 2026-05-28
+- [x] 0.2.1 复制 `etfagents/dataflows/` 全部（除 fred/macro_data 外）
+      （20 文件，全部相对 import 无需修改；唯一调整：`config.py` 把
+      `import etfagents.default_config` → `import mosaic.default_config`，
+      `ContextVar` 名 `etfagents_*` → `mosaic_*`）
+- [x] 0.2.2 复制 `etfagents/cache_manager.py`
+      （唯一调整：`cache.clear("checkpoints")` 把 `from etfagents.graph.checkpointer
+      import clear_all_checkpoints` 改为 try/except 包裹的 lazy import；
+      `mosaic.graph` 在 Phase 2 落地前用 rmtree 兜底）
+- [x] 0.2.3 新写 `mosaic/dataflows/fred.py`（343 LOC）：
+      * `load_dotenv` 读 `FRED_API_KEY`（缺失抛 `DataVendorUnavailable`，让 fallback 链生效）
+      * `_fetch_series_dataframe(...)` 返回 `pandas.DataFrame`（私有，测试 + macro_tools 用）
+      * `get_fred_series(...)` 返回 CSV 字符串（vendor 契约，被 `route_to_vendor` 调用）
+      * 限速：`_SlidingWindowLimiter` 实现 120 req/min 滑动窗口（线程安全）
+      * 磁盘缓存：`{data_cache_dir}/fred/{series_id}_{start}_{end}.json`，24h TTL
+      * `clear_cache()` helper（用于测试 + 后续 `cache.clear("api")` 集成）
+- [x] 0.2.4 改 `mosaic/dataflows/interface.py` 加 FRED 路由：
+      * 新增 `from .fred import get_fred_series as get_fred_series_impl`
+      * `TOOLS_CATEGORIES["macro_data"]` 类目占位（Day 3 填充其他 7 个 macro tool）
+      * `VENDOR_LIST` 加 `"fred"`
+      * `VENDOR_METHODS["get_fred_series"] = {"fred": get_fred_series_impl}`
+      * `_RANGE_DATE_METHODS["get_fred_series"] = (1, 2)` 让 backtest_context 正确 clamp end_date
+- [x] 0.2.5 写 `tests/test_fred.py`（277 LOC）：
+      * 19 个测试，**15 passed + 4 skipped**（live integration 在 `FRED_API_KEY` 缺失时跳过）
+      * 覆盖：input validation、CSV 输出、DataFrame 输出、FRED 错误负载、HTTP 失败、
+        cache 命中/失效/清理、限速器在容量内/超容量行为
+      * 用 `monkeypatch + unittest.mock` 完全 hermetic（无网络）
+      * 装了 `pandas==3.0.3` + `pytest==9.0.3` 作为 Day 2 测试依赖
+- [x] 0.2.6 端到端 bridge 验证：
+      * `config.get` / `config.set`：从 Day 1 的 `CONFIG_ERROR` → 正常工作（设 `output_language=English`、
+        `active_cohort=crisis_2008` 后从响应里读回）
+      * `cache.stats`：返回 `{api: 0, signals: 0, snapshots: 0, checkpoints: 0, total_mb: 0}`，
+        `subdirs=["fred"]`（fred.py 早期烟雾测试创建）
+      * `cache.cleanup` / `cache.details`：响应正常
+      * `tools.list` 仍为 `[]`（Day 4 才加 macro_tools）
+
+**Day 2 → Day 3 待办**：写 `mosaic/dataflows/macro_data.py`（~400 LOC）
+覆盖 PBOC/北向/龙虎榜/中国国债曲线/中美利差/雪球/产业政策 7 个 A 股本地数据源。
+届时安装 `[data]` extras（pandas + tushare + akshare + yfinance + stockstats + pytz）
+让 `mosaic.dataflows.interface` 端到端 import 通过。
 
 ### Day 3：Macro data 接口
 - [ ] 0.3.1 写 `mosaic/dataflows/macro_data.py`（~400 LOC）：
