@@ -26,7 +26,7 @@ Tool                            Used by                                         
 ``get_lhb_ranking``             institutional_flow                                Tushare top_list
 ``get_yield_curve_cn``          central_bank, yield_curve                         Tushare yc_cb
 ``get_us_china_spread``         yield_curve                                       Tushare yc_cb + FRED DGS10
-``get_xueqiu_heat``             news_sentiment                                    AkShare stock_hot_search_xq
+``get_xueqiu_heat``             news_sentiment                                    AkShare stock_hot_follow_xq
 ``get_industry_policy``         china                                             Tushare news + keyword filter
 ==============================  ================================================  =====================================
 """
@@ -240,8 +240,9 @@ def get_xueqiu_heat(
     ticker: Annotated[
         Optional[str],
         "Optional 6-digit ticker (with or without .SH / .SZ suffix). When set, "
-        "filters the hot-search list to that ticker; otherwise returns the "
-        "full ranking truncated to top_n.",
+        "filters the hot-attention list to that ticker (substring match against "
+        "akshare's exchange-prefixed code, e.g. 'SH600519'); otherwise returns "
+        "the full ranking truncated to top_n.",
     ] = None,
     top_n: Annotated[
         int,
@@ -249,18 +250,22 @@ def get_xueqiu_heat(
     ] = 30,
 ) -> str:
     """
-    Retrieve retail-sentiment hot-search rankings from Xueqiu (snowball.com).
+    Retrieve retail-sentiment hot-attention rankings from Xueqiu (snowball.com).
 
-    Source: AkShare ``stock_hot_search_xq``. Returns the current ranking with
-    ``code``, ``name``, ``count`` (current attention), and ``increase`` (24h
-    delta). Used by ``news_sentiment`` to gauge retail attention concentration.
+    Source: AkShare ``stock_hot_follow_xq(symbol="最热门")``. Returns the
+    current 关注排行榜 with columns ``[股票代码, 股票简称, 关注, 最新价]``,
+    where ``股票代码`` uses akshare's exchange-prefixed format
+    (``"SH600519"`` / ``"SZ300033"``) and ``关注`` is the current Xueqiu
+    follower count. Used by ``news_sentiment`` to gauge retail attention
+    concentration.
 
     Note: this is real-time data and is **blocked in backtest mode** by
     ``mosaic.dataflows.interface._UNBOUNDED_BACKTEST_METHODS``; use other
     sentiment proxies for historical research.
 
     Args:
-        ticker: optional 6-digit ticker filter (case-insensitive).
+        ticker: optional 6-digit ticker filter (case-insensitive substring
+            match against akshare's exchange-prefixed code).
         top_n: row cap when no ticker is supplied, default 30.
 
     Returns:

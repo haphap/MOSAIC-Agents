@@ -454,5 +454,86 @@ class MacroToolBridgeTests(_BridgeTestCase):
         )
 
 
+# ====================================================================
+# Layer 3 — broken-pipe regression (Phase 0 hotfix 2026-05-29)
+# ====================================================================
+
+
+class BrokenPipeRegressionTests(unittest.TestCase):
+    """Regression coverage for the BrokenPipeError noise the user hit when a
+    downstream consumer in a shell pipeline died before reading the bridge's
+    response.
+
+    Before the fix: bridge wrote one response (fit in pipe buffer), saw EOF
+    on stdin, returned cleanly — but Python's interpreter shutdown flushed
+    stdout one more time, hitting the closed pipe and emitting an
+    "Exception ignored in <_io.TextIOWrapper>" + BrokenPipeError traceback
+    on stderr. After the fix: bridge proactively redirects stdout to
+    /dev/null when it detects a broken pipe, so the interpreter's at-exit
+    flush has nothing to write.
+    """
+
+    def test_consumer_crash_does_not_leak_traceback(self) -> None:
+        """Consumer dies before reading any output → bridge exits 0, no traceback."""
+        request = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools.list",
+            "params": {},
+        })
+        # Pipeline: bridge writes a single response, then a consumer that
+        # exits *before reading anything* closes its stdin pipe.
+        cmd = (
+            f"echo '{request}' | "
+            f"{PYTHON} -m mosaic.bridge 2>/tmp/_mosaic_bridge_stderr.log | "
+            f"{PYTHON} -c 'raise SystemExit(0)'"
+        )
+        result = subprocess.run(
+            cmd, shell=True, capture_output=True, timeout=15, executable="/bin/bash"
+        )
+        # The pipeline exit status is the consumer's (raise SystemExit(0) → 0).
+        # The interesting signal is on the bridge's stderr.
+        with open("/tmp/_mosaic_bridge_stderr.log", "r", encoding="utf-8") as fh:
+            bridge_stderr = fh.read()
+        self.assertNotIn(
+            "Traceback",
+            bridge_stderr,
+            msg=f"bridge leaked a traceback on broken pipe:\n{bridge_stderr}",
+        )
+        self.assertNotIn(
+            "BrokenPipeError",
+            bridge_stderr,
+            msg=f"bridge leaked BrokenPipeError on stderr:\n{bridge_stderr}",
+        )
+        # The "ready" log line should still appear — proves the bridge actually started.
+        self.assertIn("MOSAIC bridge ready", bridge_stderr)
+
+    def test_consumer_exits_after_one_response_is_clean(self) -> None:
+        """Healthy single-shot pipeline (consumer reads one response then exits)."""
+        request = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools.list",
+            "params": {},
+        })
+        cmd = (
+            f"echo '{request}' | "
+            f"{PYTHON} -m mosaic.bridge 2>/tmp/_mosaic_bridge_stderr.log"
+        )
+        result = subprocess.run(
+            cmd, shell=True, capture_output=True, timeout=15, executable="/bin/bash"
+        )
+        self.assertEqual(result.returncode, 0)
+        # stdout should contain a valid JSON-RPC response
+        line = result.stdout.decode("utf-8").strip()
+        response = json.loads(line)
+        self.assertEqual(response["id"], 1)
+        self.assertIsInstance(response["result"], list)
+        with open("/tmp/_mosaic_bridge_stderr.log", "r", encoding="utf-8") as fh:
+            bridge_stderr = fh.read()
+        self.assertNotIn("Traceback", bridge_stderr)
+        self.assertNotIn("BrokenPipeError", bridge_stderr)
+
+
 if __name__ == "__main__":
     sys.exit(unittest.main())

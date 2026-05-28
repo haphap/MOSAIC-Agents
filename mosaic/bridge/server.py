@@ -101,19 +101,55 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _serve_streams(stdin: IO[str], stdout: IO[str]) -> None:
-    """Drive dispatch off two text streams. Public for tests."""
-    for raw in stdin:
-        line = raw.rstrip("\r\n")
-        if not line:
-            continue
-        try:
-            request = json.loads(line)
-        except json.JSONDecodeError as exc:
-            response = _build_error(None, PARSE_ERROR, f"Invalid JSON: {exc}")
-        else:
-            response = dispatch(request)
-        stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-        stdout.flush()
+    """Drive dispatch off two text streams. Public for tests.
+
+    Returns cleanly on:
+      * EOF on stdin (consumer closed its pipe → ``for raw in stdin`` exits).
+      * BrokenPipeError on stdout (consumer died before reading our reply →
+        the bridge silently stops; nothing useful left to say).
+    """
+    try:
+        for raw in stdin:
+            line = raw.rstrip("\r\n")
+            if not line:
+                continue
+            try:
+                request = json.loads(line)
+            except json.JSONDecodeError as exc:
+                response = _build_error(None, PARSE_ERROR, f"Invalid JSON: {exc}")
+            else:
+                response = dispatch(request)
+            try:
+                stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+                stdout.flush()
+            except BrokenPipeError:
+                # Consumer is gone; suppress the noisy traceback Python would
+                # otherwise emit at interpreter shutdown when stdout is reaped.
+                logger.debug("stdout pipe broken; consumer disconnected — exiting cleanly.")
+                _silence_stdout(stdout)
+                return
+    except BrokenPipeError:
+        logger.debug("stdin pipe broken; exiting cleanly.")
+        _silence_stdout(stdout)
+
+
+def _silence_stdout(stdout: IO[str]) -> None:
+    """Redirect stdout to /dev/null so interpreter shutdown doesn't reraise.
+
+    Python flushes stdout one more time at exit; on a broken pipe that flush
+    raises *another* BrokenPipeError, which is reported as
+    ``Exception ignored in <_io.TextIOWrapper>``. Re-pointing stdout at the
+    null device avoids that second flush ever hitting the broken pipe.
+    """
+    import os
+
+    try:
+        devnull = open(os.devnull, "w", encoding="utf-8")
+        sys.stdout = devnull  # type: ignore[assignment]
+    except OSError:
+        # Best effort; if we can't even open /dev/null, the noisy "Exception
+        # ignored" line is acceptable.
+        pass
 
 
 def run_stdio_server() -> None:
@@ -122,6 +158,13 @@ def run_stdio_server() -> None:
     _load_handlers()
     logger.info("MOSAIC bridge ready (methods: %d)", len(_handler_count()))
     _serve_streams(sys.stdin, sys.stdout)
+    # Proactively drain stdout one more time. If the consumer is already gone
+    # the interpreter's own at-exit flush would otherwise raise BrokenPipeError
+    # and emit the noisy "Exception ignored in <_io.TextIOWrapper ...>" line.
+    try:
+        sys.stdout.flush()
+    except BrokenPipeError:
+        _silence_stdout(sys.stdout)
 
 
 def _handler_count() -> list[str]:
