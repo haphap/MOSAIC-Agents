@@ -381,14 +381,21 @@ def _extract_cn_10y_yield(df):
 
 
 def get_xueqiu_heat(ticker: str | None = None, top_n: int = 30) -> str:
-    """Fetch retail-sentiment hot-search rankings from Xueqiu (snowball.com).
+    """Fetch retail-sentiment hot-attention rankings from Xueqiu (snowball.com).
 
-    AkShare endpoint ``stock_hot_search_xq`` returns the current 50-row
-    hot-search rank with columns ``code, name, count, increase`` (24h search
-    delta). When ``ticker`` is supplied we filter the table to that single row
-    if present, otherwise return the entire ranking truncated to ``top_n``.
+    AkShare endpoint ``stock_hot_follow_xq(symbol="最热门")`` returns a 200-row
+    daily ranking with columns ``["股票代码", "股票简称", "关注", "最新价"]``.
+    The ``股票代码`` column uses akshare's exchange-prefixed format
+    (``"SH600519"`` / ``"SZ300033"``). When ``ticker`` is supplied we filter to
+    rows whose code contains the bare 6-digit number; otherwise we return the
+    top ``top_n`` rows of the global ranking.
 
     Used by ``news_sentiment`` to gauge retail attention concentration.
+
+    Endpoint history: an earlier draft of this module called
+    ``stock_hot_search_xq``, which does **not** exist in akshare ≥1.18 — see
+    plan §14 待决议题 for the list of vendor endpoint names that were
+    realigned during Day 4 live verification.
     """
     if top_n < 1:
         raise DataVendorUnavailable("top_n must be >= 1.")
@@ -400,10 +407,10 @@ def get_xueqiu_heat(ticker: str | None = None, top_n: int = 30) -> str:
         ) from exc
 
     try:
-        df = ak.stock_hot_search_xq()
+        df = ak.stock_hot_follow_xq(symbol="最热门")
     except Exception as exc:
         raise DataVendorUnavailable(
-            f"AkShare stock_hot_search_xq failed: {exc}"
+            f"AkShare stock_hot_follow_xq failed: {exc}"
         ) from exc
 
     if df is None or df.empty:
@@ -415,13 +422,13 @@ def get_xueqiu_heat(ticker: str | None = None, top_n: int = 30) -> str:
             ) from imp_exc
         df = pd.DataFrame()
 
-    title = "雪球热门搜索 / Xueqiu Hot Search"
+    title = "雪球关注排行榜 / Xueqiu Hot Follow Ranking"
     if ticker:
         ticker_norm = str(ticker).strip().upper()
-        # AkShare codes are bare 6-digit numbers; strip any suffix (.SH/.SZ).
+        # Strip MOSAIC's "600519.SH" suffix style → bare 6-digit "600519".
         bare = ticker_norm.split(".")[0] if "." in ticker_norm else ticker_norm
-        if not df.empty and "code" in df.columns:
-            df = df[df["code"].astype(str).str.upper() == bare]
+        if not df.empty and "股票代码" in df.columns:
+            df = df[df["股票代码"].astype(str).str.upper().str.contains(bare, na=False)]
         title = f"{title} — filter ticker={ticker}"
     elif top_n:
         df = df.head(int(top_n))
@@ -429,8 +436,8 @@ def get_xueqiu_heat(ticker: str | None = None, top_n: int = 30) -> str:
     return _df_to_markdown_csv(
         df,
         title=title,
-        subtitle="Source: AkShare stock_hot_search_xq. count = current attention; increase = 24h delta.",
-        empty_note=f"No Xueqiu hot-search entries{f' for ticker {ticker}' if ticker else ''}.",
+        subtitle="Source: AkShare stock_hot_follow_xq(symbol='最热门'). 关注 = current follower count.",
+        empty_note=f"No Xueqiu hot-follow entries{f' for ticker {ticker}' if ticker else ''}.",
     )
 
 

@@ -288,14 +288,15 @@ def test_extract_cn_10y_yield_handles_alt_schema():
 
 @pytest.fixture
 def fake_xq_module(monkeypatch):
-    """Provide a stand-in for ``akshare.stock_hot_search_xq``."""
+    """Provide a stand-in for ``akshare.stock_hot_follow_xq``."""
 
     class _StubAk:
         def __init__(self, df=None, raises=None):
             self._df = df
             self._raises = raises
 
-        def stock_hot_search_xq(self):
+        def stock_hot_follow_xq(self, symbol="最热门"):
+            assert symbol == "最热门"
             if self._raises is not None:
                 raise self._raises
             return self._df
@@ -311,25 +312,27 @@ def fake_xq_module(monkeypatch):
 def test_get_xueqiu_heat_returns_top_n(fake_xq_module):
     df = pd.DataFrame(
         {
-            "code": [f"{600000 + i:06d}" for i in range(50)],
-            "name": [f"name{i}" for i in range(50)],
-            "count": list(range(50, 0, -1)),
-            "increase": [0.1 * i for i in range(50)],
+            "股票代码": [f"SZ{300000 + i:06d}" for i in range(50)],
+            "股票简称": [f"name{i}" for i in range(50)],
+            "关注": list(range(50, 0, -1)),
+            "最新价": [10.0 + 0.1 * i for i in range(50)],
         }
     )
     fake_xq_module(df=df)
 
     out = macro_data.get_xueqiu_heat(top_n=5)
-    body = "\n".join(out.splitlines()[3:])  # skip title + subtitle + header
-    assert body.count("\n") == 4  # 5 rows ⇒ 4 newlines between them
-    assert "Hot Search" in out
+    body_lines = out.splitlines()
+    # title + subtitle + csv-header + 5 rows = 8 lines (no trailing blank)
+    assert "Hot Follow Ranking" in out
+    csv_rows = [ln for ln in body_lines if ln.startswith("SZ")]
+    assert len(csv_rows) == 5
 
 
 def test_get_xueqiu_heat_filters_by_ticker(fake_xq_module):
     df = pd.DataFrame(
         [
-            {"code": "600519", "name": "贵州茅台", "count": 9999, "increase": 12.3},
-            {"code": "601398", "name": "工商银行", "count": 5000, "increase": 4.5},
+            {"股票代码": "SH600519", "股票简称": "贵州茅台", "关注": 9999, "最新价": 1700.0},
+            {"股票代码": "SH601398", "股票简称": "工商银行", "关注": 5000, "最新价": 5.5},
         ]
     )
     fake_xq_module(df=df)
@@ -341,7 +344,7 @@ def test_get_xueqiu_heat_filters_by_ticker(fake_xq_module):
 
 def test_get_xueqiu_heat_failure_wraps(fake_xq_module):
     fake_xq_module(raises=RuntimeError("network down"))
-    with pytest.raises(DataVendorUnavailable, match="stock_hot_search_xq failed"):
+    with pytest.raises(DataVendorUnavailable, match="stock_hot_follow_xq failed"):
         macro_data.get_xueqiu_heat()
 
 

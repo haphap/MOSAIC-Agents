@@ -77,7 +77,7 @@ Cohort 切换 UI（PRISM）                                       paper_trading/
 
 | Phase | 范围 | 估算 turns | 状态 |
 |---|---|---|---|
-| 0 | Python sidecar + bridge（Tushare/FRED + 10 macro tools） | 5–6 | 🟡 进行中（Day 1+2+3 ✅ 2026-05-28） |
+| 0 | Python sidecar + bridge（Tushare/FRED + 10 macro tools） | 5–6 | 🟡 进行中（Day 1+2+3+4 ✅ 2026-05-28） |
 | 1 | TS skeleton + bridge-client（直接复用 ETFAgents Phase 1） | 3–4 | ⏭ |
 | 2 | Daily cycle MVP：25 agents + 4 层 LangGraph.js（单 cohort） | 11–12 | ⏭ |
 | 3 | Scorecard + Darwinian 权重 | 4 | ⏭ |
@@ -556,14 +556,63 @@ export function buildCentralBankSystemMessage(ctx: PromptContext): string {
   的地方，已在函数 docstring 里记录。Day 5 验证后若发现存在更精确的 "政策新闻"
   endpoint（如 `cctv_news` 联播专题），可以在不破坏接口的前提下迁移过去。
 
-### Day 4：Macro tools 包装
-- [ ] 0.4.1 写 `mosaic/agents/utils/macro_tools.py`：
-  - 10 个 `@tool`-decorated 函数包装 `macro_data.py`
-  - 每个 tool 必须有 docstring + `Annotated` 参数描述
-  - 沿用 `etfagents/agents/utils/*_tools.py` 模式
-- [ ] 0.4.2 验证 bridge `tools.list` 自动发现这 10 个新 tool（通过
-  `_TOOL_MODULES` 加新路径）
-- [ ] 0.4.3 写 `tests/test_macro_tools.py`
+### Day 4：Macro tools 包装 ✅ 2026-05-28
+- [x] 0.4.1 写 `mosaic/agents/utils/macro_tools.py`（321 LOC）：
+  - 8 个 `@tool`-decorated 函数（`get_fred_series` + 7 macro_data 函数）
+  - 每个 tool 用 `typing.Annotated` 给参数加描述，docstring 完整 Args/Returns
+  - 全部委托给 `mosaic.dataflows.interface.route_to_vendor`，自动获得：
+    backtest 上下文裁剪 + vendor 路由 + 配置驱动的 fallback 链
+  - 沿用 `etfagents/agents/utils/*_tools.py` 模式（`from langchain_core.tools import tool`）
+  - **注**：plan §11 写"10 个"，但 macro_data.py 只有 7 个 + fred 1 个 = 8 个。
+    plan 数字偏离了实际函数表，已纠正记录在此。
+
+  并补建 `mosaic/agents/__init__.py` 和 `mosaic/agents/utils/__init__.py` 子包。
+
+- [x] 0.4.2 把 `"mosaic.agents.utils.macro_tools"` 加进
+  `mosaic/bridge/handlers/tools.py:_TOOL_MODULES`。bridge `tools.list` 现在返回 **8 个工具**，
+  每个含完整 Pydantic v2 `args_schema`（含 `Annotated` 描述）。
+
+- [x] 0.4.3 写 `tests/test_macro_tools.py`（298 LOC，44 个测试 全绿）：
+  - **Registration**：每个工具都是 `BaseTool` 实例，`__all__` 完整，
+    bridge `_iter_module_tools` 能发现全部 8 个，`_TOOL_MODULES` 含路径
+  - **Schemas**：每个工具的 args_schema 属性集合 / required 集合 / 描述都正确
+  - **Dispatch**：`.invoke({...})` 正确把 args 转成 positional 调 `route_to_vendor`
+    （含默认值场景，9 条 dispatch 用例覆盖全部 8 个工具）
+  - **Bridge handler**：`tools_list({})` 返 8 项；`tools_call(...)` 经
+    `route_to_vendor` 派发；未知 tool → `METHOD_NOT_FOUND`；非 dict args →
+    `INVALID_PARAMS`；底层 `DataVendorUnavailable` → `DATA_VENDOR_UNAVAILABLE`；
+    缺 required arg → `TOOL_EXECUTION_ERROR/INVALID_PARAMS` 含 Pydantic 错误细节
+
+- [x] 0.4.4（端到端 smoke）实跑 `python -m mosaic.bridge` 6 个真实 JSON-RPC 请求：
+  ```
+  tools.call get_fred_series  → DATA_VENDOR_UNAVAILABLE (FRED_API_KEY 未配)
+  tools.call get_pboc_ops     → TOOL_EXECUTION_ERROR (TUSHARE_TOKEN 未配)
+  tools.call get_xueqiu_heat  → 暴露真实问题 (见下)
+  tools.call missing arg      → ValidationError 透出 Pydantic 详细信息
+  tools.call unknown tool     → METHOD_NOT_FOUND
+  tools.call backtest mode    → 阻塞 get_xueqiu_heat（_UNBOUNDED_BACKTEST_METHODS）
+  ```
+  另用 mock 注入 `sys.modules['akshare']` 跑通了 get_xueqiu_heat 的完整链路：
+  bridge → `@tool` wrapper → `route_to_vendor` → `macro_data.get_xueqiu_heat` →
+  akshare → DataFrame → CSV → JSON-RPC `result.text`，返回真 CSV 内容。
+
+**当日全套测试：87 passed + 6 skipped**（macro_data 30 + macro_tools 44 + fred 19 - 6 live）。
+
+**Day 4 → Day 5 待办**：
+- 复制 `etfagents/tests/test_bridge_protocol.py` 模板适配 mosaic 包名
+- 端到端 smoke：spawn `python -m mosaic.bridge`，实际配 `TUSHARE_TOKEN` /
+  `FRED_API_KEY`，跑 `tools.call(get_north_capital_flow, ...)` 拿真数据
+- 把已收敛的 §14 议题（Tushare endpoint 名 / akshare endpoint 名）做 live 验证
+
+**§14 新增议题**（Day 4 实弹暴露 + 已修复）：
+- AkShare 端点名 `stock_hot_search_xq` 在 1.18.x **不存在**。Day 4 端到端测试触发
+  `AttributeError: module 'akshare' has no attribute 'stock_hot_search_xq'`。
+  探查 akshare 真实接口后切换到 `stock_hot_follow_xq(symbol="最热门")`，schema
+  为 `["股票代码", "股票简称", "关注", "最新价"]`（股票代码格式 `SH600519`，与
+  Tushare 的 `600519.SH` 不同，过滤逻辑做了 substring 匹配适配）。
+- 这次实弹暴露说明：Day 5 必须做 **每个 vendor endpoint 的真调用** 验证，不能只信 mock。
+  Tushare 的 `cb_op` / `yc_cb` / `news` 仍未真实验证；Day 5 跑通时若发现实际名异，
+  调整 `mosaic/dataflows/macro_data.py` 调用点即可（mock 测试不变）。
 
 ### Day 5：Bridge 集成测试
 - [ ] 0.5.1 复制 `etfagents/tests/test_bridge_protocol.py` 模板，
