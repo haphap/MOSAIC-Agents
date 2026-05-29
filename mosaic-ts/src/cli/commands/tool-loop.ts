@@ -88,7 +88,7 @@ export function registerToolLoop(program: Command): void {
           new HumanMessage(question),
         ];
 
-        const final = await runToolLoop(messages, llmWithTools, [boundTool]);
+        const final = await runToolLoop(messages, llmWithTools, llmHandle.llm, [boundTool]);
         const text = extractText(final);
         console.log(pc.cyan("\n=== assistant ==="));
         console.log(text || pc.dim("(empty)"));
@@ -114,14 +114,17 @@ interface BoundLlm {
   invoke(messages: BaseMessage[]): Promise<AIMessage>;
 }
 
-async function runToolLoop(
+/** Exported for unit testing — the CLI flow above is the only runtime caller. */
+export async function runToolLoop(
   messages: BaseMessage[],
   llm: BoundLlm,
+  unboundLlm: BoundLlm,
   tools: StructuredToolInterface[],
+  maxLoops: number = MAX_LOOPS,
 ): Promise<AIMessage> {
   const toolByName = new Map(tools.map((t) => [t.name, t] as const));
 
-  for (let step = 0; step < MAX_LOOPS; step++) {
+  for (let step = 0; step < maxLoops; step++) {
     const ai = await llm.invoke(messages);
     messages.push(ai);
 
@@ -156,8 +159,12 @@ async function runToolLoop(
       );
     }
   }
-  // Forced exit: ask the LLM for one final answer without tool privileges.
-  const final = await llm.invoke([
+  // Forced exit: ask the **unbound** LLM (no tools) for a final answer.
+  // Using the tool-bound model here would let it keep emitting tool_calls
+  // and ignore the "do not call tools" instruction in the prompt — the
+  // tool privilege has to be revoked at the model layer, not at the
+  // prompt layer.
+  const final = await unboundLlm.invoke([
     ...messages,
     new HumanMessage("工具调用次数已达到上限。请基于已有信息直接给出最终回答，不再调用工具。"),
   ]);
