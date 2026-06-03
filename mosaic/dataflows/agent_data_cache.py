@@ -2,9 +2,10 @@
 
 The cache is intentionally generic: it stores the exact result returned by
 ``route_to_vendor(method, *args, **kwargs)`` keyed by the method name, the
-date-clamped arguments, and the selected vendor fallback chain. That makes
-every agent tool cache-first without adding vendor-specific code to each
-dataflow module, while still respecting vendor configuration changes.
+date-clamped arguments, the selected vendor fallback chain, and any active
+runtime context such as a backtest as-of date. That makes every agent tool
+cache-first without adding vendor-specific code to each dataflow module, while
+still respecting vendor configuration changes and historical replay boundaries.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -22,9 +24,11 @@ from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _DEFAULT_READ_TTL_SECONDS = 24 * 3600
 _DEFAULT_MAX_ENTRIES = 50_000
+_SCHEMA_INIT_LOCK = threading.Lock()
+_SCHEMA_INITIALISED_PATHS: set[str] = set()
 _EMPTY_TEXT_MARKERS = (
     "no data found",
     "no data returned",
@@ -108,9 +112,6 @@ def _is_empty_result(value: Any) -> bool:
         return len(value) == 0
     if isinstance(value, dict):
         return len(value) == 0
-    empty_attr = getattr(value, "empty", None)
-    if isinstance(empty_attr, bool):
-        return empty_attr
     return False
 
 
@@ -206,6 +207,7 @@ def _canonical_request(
     kwargs: dict[str, Any],
     *,
     vendor_chain: list[str],
+    runtime_context: dict[str, Any] | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -214,6 +216,7 @@ def _canonical_request(
             "args": _normalise(args),
             "kwargs": _normalise(kwargs),
             "vendor_chain": _normalise(vendor_chain),
+            "runtime_context": _normalise(runtime_context or {}),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -227,8 +230,15 @@ def cache_key(
     kwargs: dict[str, Any],
     *,
     vendor_chain: list[str],
+    runtime_context: dict[str, Any] | None = None,
 ) -> str:
-    request_json = _canonical_request(method, args, kwargs, vendor_chain=vendor_chain)
+    request_json = _canonical_request(
+        method,
+        args,
+        kwargs,
+        vendor_chain=vendor_chain,
+        runtime_context=runtime_context,
+    )
     return hashlib.sha256(request_json.encode("utf-8")).hexdigest()
 
 
@@ -293,8 +303,15 @@ class AgentDataCache:
         kwargs: dict[str, Any],
         *,
         vendor_chain: list[str],
+        runtime_context: dict[str, Any] | None = None,
     ) -> CacheLookup:
-        key = cache_key(method, args, kwargs, vendor_chain=vendor_chain)
+        key = cache_key(
+            method,
+            args,
+            kwargs,
+            vendor_chain=vendor_chain,
+            runtime_context=runtime_context,
+        )
         now = _now_iso()
         with self._connect() as conn:
             row = conn.execute(
@@ -343,6 +360,7 @@ class AgentDataCache:
         *,
         vendor: str | None,
         vendor_chain: list[str],
+        runtime_context: dict[str, Any] | None = None,
     ) -> bool:
         if self.skip_empty_results and _is_empty_result(value):
             logger.debug("agent data cache skipped empty result for %s", method)
@@ -354,8 +372,20 @@ class AgentDataCache:
             return False
 
         result_format, payload = encoded
-        request_json = _canonical_request(method, args, kwargs, vendor_chain=vendor_chain)
-        key = cache_key(method, args, kwargs, vendor_chain=vendor_chain)
+        request_json = _canonical_request(
+            method,
+            args,
+            kwargs,
+            vendor_chain=vendor_chain,
+            runtime_context=runtime_context,
+        )
+        key = cache_key(
+            method,
+            args,
+            kwargs,
+            vendor_chain=vendor_chain,
+            runtime_context=runtime_context,
+        )
         now = _now_iso()
         payload_bytes = len(payload.encode("utf-8"))
         with self._connect() as conn:
@@ -455,11 +485,18 @@ class AgentDataCache:
         if days == 0:
             return self.drop_database()
         cutoff = datetime.fromtimestamp(time() - days * 86400, timezone.utc).replace(microsecond=0).isoformat()
+        before_bytes = self._database_size_bytes()
         with self._connect() as conn:
             before = conn.execute("SELECT COUNT(*) FROM agent_data_cache").fetchone()[0]
             conn.execute("DELETE FROM agent_data_cache WHERE updated_at < ?", (cutoff,))
             after = conn.execute("SELECT COUNT(*) FROM agent_data_cache").fetchone()[0]
-        return int(before - after), 0.0
+            deleted = int(before - after)
+            if deleted:
+                conn.commit()
+                conn.execute("VACUUM")
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        after_bytes = self._database_size_bytes()
+        return deleted, max(0, before_bytes - after_bytes) / (1024 * 1024)
 
     def drop_database(self) -> tuple[int, float]:
         count = 0
@@ -478,6 +515,20 @@ class AgentDataCache:
             except OSError:
                 continue
         return count, total_bytes / (1024 * 1024)
+
+    def _database_size_bytes(self) -> int:
+        total = 0
+        for path in (
+            self.db_path,
+            self.db_path.with_suffix(self.db_path.suffix + "-wal"),
+            self.db_path.with_suffix(self.db_path.suffix + "-shm"),
+        ):
+            try:
+                if path.is_file():
+                    total += path.stat().st_size
+            except OSError:
+                continue
+        return total
 
     def details(self, page: int = 1, page_size: int = 20) -> dict[str, Any]:
         if not self.db_path.is_file():
@@ -508,8 +559,25 @@ class AgentDataCache:
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_existed = self.db_path.exists()
+        schema_key = str(self.db_path.resolve())
         conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
+        if not db_existed or schema_key not in _SCHEMA_INITIALISED_PATHS:
+            with _SCHEMA_INIT_LOCK:
+                if not db_existed or schema_key not in _SCHEMA_INITIALISED_PATHS:
+                    self._initialise_schema(conn)
+                    _SCHEMA_INITIALISED_PATHS.add(schema_key)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def _initialise_schema(self, conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
             """
@@ -537,11 +605,3 @@ class AgentDataCache:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_data_cache_updated ON agent_data_cache(updated_at)"
         )
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()

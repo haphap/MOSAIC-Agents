@@ -109,7 +109,7 @@ export interface MosaicConfig {
   // ----- Data vendors (Phase 0) -----
   data_vendors: Record<string, string>;
   tool_vendors: Record<string, string>;
-  /** Permanent exact-call SQLite cache for routed agent data tools. */
+  /** SQLite exact-call cache for routed agent data tools. */
   agent_data_cache?: {
     enabled?: boolean;
     db_path?: string | null;

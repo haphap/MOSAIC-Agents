@@ -134,6 +134,35 @@ def test_vendor_chain_is_part_of_cache_key(monkeypatch):
     assert _cache().stats()["entries"] == 2
 
 
+def test_empty_tool_vendor_does_not_fall_through_to_category_default(monkeypatch):
+    calls = []
+
+    def fallback_vendor(*args):
+        calls.append(("fallback", args))
+        return "fallback payload"
+
+    def category_vendor(*args):
+        calls.append(("category", args))
+        return "category payload"
+
+    monkeypatch.setitem(
+        interface.VENDOR_METHODS,
+        "get_stock_data",
+        {"fallback": fallback_vendor, "category": category_vendor},
+    )
+    set_config(
+        {
+            "data_cache_dir": get_config()["data_cache_dir"],
+            "data_vendors": {"core_stock_apis": "category"},
+            "tool_vendors": {"get_stock_data": ""},
+            "agent_data_cache": {"enabled": False},
+        }
+    )
+
+    assert interface.route_to_vendor("get_stock_data", "AAPL.US", "2024-01-01", "2024-01-31") == "fallback payload"
+    assert calls == [("fallback", ("AAPL.US", "2024-01-01", "2024-01-31"))]
+
+
 def test_backtest_clamped_arguments_define_cache_key(monkeypatch):
     calls = []
 
@@ -151,6 +180,32 @@ def test_backtest_clamped_arguments_define_cache_key(monkeypatch):
     assert first == "DGS10:2024-06-01:2024-06-15"
     assert second == first
     assert calls == [("DGS10", "2024-06-01", "2024-06-15")]
+
+
+def test_backtest_as_of_context_is_part_of_cache_key(monkeypatch):
+    calls = []
+
+    def fake_fred(series_id, start_date, end_date):
+        calls.append((series_id, start_date, end_date))
+        return f"payload-{len(calls)}"
+
+    monkeypatch.setitem(interface.VENDOR_METHODS, "get_fred_series", {"fred": fake_fred})
+
+    with backtest_context("2024-06-15"):
+        first = interface.route_to_vendor("get_fred_series", "DGS10", "2024-01-01", "2024-01-31")
+    with backtest_context("2024-06-16"):
+        second = interface.route_to_vendor("get_fred_series", "DGS10", "2024-01-01", "2024-01-31")
+    with backtest_context("2024-06-15"):
+        third = interface.route_to_vendor("get_fred_series", "DGS10", "2024-01-01", "2024-01-31")
+
+    assert first == "payload-1"
+    assert second == "payload-2"
+    assert third == "payload-1"
+    assert calls == [
+        ("DGS10", "2024-01-01", "2024-01-31"),
+        ("DGS10", "2024-01-01", "2024-01-31"),
+    ]
+    assert _cache().stats()["entries"] == 2
 
 
 def test_stale_cache_entry_is_refetched(monkeypatch):
@@ -330,3 +385,32 @@ def test_cache_manager_exposes_agent_data_category(monkeypatch):
     cleared = manager.clear("agent_data")
     assert cleared["deleted_files"] == 1
     assert manager.stats()["agent_data"]["entries"] == 0
+
+
+def test_agent_data_cleanup_reports_reclaimed_sqlite_space():
+    cache = _cache()
+    large_payload = "x" * (1024 * 1024)
+    assert cache.set(
+        "get_fred_series",
+        ("DFF", "2024-01-01", "2024-01-31"),
+        {},
+        large_payload,
+        vendor="fred",
+        vendor_chain=["fred"],
+    )
+    assert cache.set(
+        "get_fred_series",
+        ("DGS10", "2024-01-01", "2024-01-31"),
+        {},
+        large_payload,
+        vendor="fred",
+        vendor_chain=["fred"],
+    )
+    with sqlite3.connect(cache.db_path) as conn:
+        conn.execute("UPDATE agent_data_cache SET updated_at = '2000-01-01T00:00:00+00:00'")
+
+    deleted, freed_mb = cache.cleanup(1)
+
+    assert deleted == 2
+    assert freed_mb > 0
+    assert cache.stats()["entries"] == 0

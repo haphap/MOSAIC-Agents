@@ -154,9 +154,10 @@ DEFAULT_CONFIG = {
     "snapshot_max_age_days": 30,
     "backtest_cache_max_age_days": 90,
     "checkpoint_max_age_days": 30,
-    # Permanent exact-call cache for every routed agent data tool. Cache hits
-    # return from SQLite before any vendor/API call; misses fetch through the
-    # normal fallback chain and write the successful result back to SQLite.
+    # Exact-call cache for every routed agent data tool. Entries persist until
+    # TTL refresh, max-entry eviction, cleanup, or clear. Backtest as-of dates
+    # are folded into the key so historical replay dates cannot share current
+    # or latest-style results.
     "agent_data_cache": {
         "enabled": _env_bool("MOSAIC_AGENT_DATA_CACHE_ENABLED", True),
         "db_path": os.getenv("MOSAIC_AGENT_DATA_CACHE_DB"),

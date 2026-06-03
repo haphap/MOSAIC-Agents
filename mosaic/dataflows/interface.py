@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 
 # Import from vendor-specific modules
@@ -60,6 +61,8 @@ from .exceptions import DataVendorUnavailable, MissingEtfHoldings
 
 # Configuration and routing logic
 from .config import get_backtest_context, get_config, increment_backtest_health
+
+logger = logging.getLogger(__name__)
 
 # Tools organized by category
 TOOLS_CATEGORIES = {
@@ -448,6 +451,13 @@ def _apply_backtest_date_bounds(method: str, args: tuple, kwargs: dict):
     )
 
 
+def _cache_runtime_context() -> dict[str, str]:
+    context = get_backtest_context()
+    if context.mode == "backtest" and context.as_of_date:
+        return {"mode": "backtest", "as_of_date": context.as_of_date}
+    return {}
+
+
 def is_a_share_ticker(ticker: str) -> bool:
     """Return True when *ticker* maps to an A-share market symbol."""
     if not isinstance(ticker, str) or not ticker.strip():
@@ -468,8 +478,7 @@ def route_to_vendor(method: str, *args, **kwargs):
 
     config = get_config()
     category = get_category_for_method(method)
-    tool_vendors = config.get("tool_vendors", {})
-    vendor_config = tool_vendors.get(method) or config.get("data_vendors", {}).get(category, "default")
+    vendor_config = get_vendor(category, method)
     primary_vendors = [v.strip() for v in str(vendor_config).split(',') if v.strip()]
 
     # For Chinese market tickers, prefer qlib (local) then tushare.
@@ -492,18 +501,24 @@ def route_to_vendor(method: str, *args, **kwargs):
         if vendor not in fallback_vendors:
             fallback_vendors.append(vendor)
 
+    # The static fallback chain is part of the key so vendor reconfiguration
+    # invalidates old results. A transient fallback hit is intentionally cached
+    # for that configured chain until read TTL expiry or eviction.
+    cache_context = _cache_runtime_context()
     agent_cache = AgentDataCache.from_config(config)
     if agent_cache is not None:
         try:
-            cached = agent_cache.get(method, args, kwargs, vendor_chain=fallback_vendors)
+            cached = agent_cache.get(
+                method,
+                args,
+                kwargs,
+                vendor_chain=fallback_vendors,
+                runtime_context=cache_context,
+            )
             if cached.hit:
                 return cached.value
         except Exception as exc:  # noqa: BLE001
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "agent data cache read failed for %s: %s", method, exc
-            )
+            logger.warning("agent data cache read failed for %s: %s", method, exc)
 
     last_error = None
 
@@ -525,11 +540,10 @@ def route_to_vendor(method: str, *args, **kwargs):
                         result,
                         vendor=vendor,
                         vendor_chain=fallback_vendors,
+                        runtime_context=cache_context,
                     )
                 except Exception as exc:  # noqa: BLE001
-                    import logging
-
-                    logging.getLogger(__name__).warning(
+                    logger.warning(
                         "agent data cache write failed for %s/%s: %s",
                         method,
                         vendor,
