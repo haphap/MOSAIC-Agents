@@ -118,7 +118,7 @@ export interface MosaicConfig {
     inject_context?: boolean;
   };
 
-  // ----- Darwinian weights (Phase 9 gated rewrite) -----
+  // ----- Darwinian weights (Phase 9 evolution, rollback-gated) -----
   darwinian?: {
     weight_rewrite_enabled?: boolean;
     weight_start?: number;

@@ -8,7 +8,7 @@ or basket series transformed into a common risk-on orientation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass(frozen=True)
@@ -229,10 +229,42 @@ def compute_drawdown_aware_path_label(
     )
 
 
-def compute_relative_path_label(proxy_closes: list[float], benchmark_closes: list[float]) -> list[float]:
+def _is_dated_path(path: list[Any]) -> bool:
+    return bool(path) and isinstance(path[0], tuple) and len(path[0]) >= 2
+
+
+def _dated_close_map(path: list[Any]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for point in path:
+        if not isinstance(point, tuple) or len(point) < 2:
+            continue
+        date, close = point[0], point[1]
+        if date is None or close is None:
+            continue
+        out[str(date)] = float(close)
+    return out
+
+
+def compute_relative_path_label(proxy_closes: list[Any], benchmark_closes: list[Any]) -> list[float]:
     """Return synthetic closes for proxy-vs-benchmark relative return path."""
     if len(proxy_closes) < 2 or len(benchmark_closes) < 2:
         return []
+    if _is_dated_path(proxy_closes) or _is_dated_path(benchmark_closes):
+        if not _is_dated_path(proxy_closes) or not _is_dated_path(benchmark_closes):
+            return []
+        proxy_by_date = _dated_close_map(proxy_closes)
+        benchmark_by_date = _dated_close_map(benchmark_closes)
+        dates = sorted(set(proxy_by_date) & set(benchmark_by_date))
+        if len(dates) < 2:
+            return []
+        p0 = proxy_by_date[dates[0]]
+        b0 = benchmark_by_date[dates[0]]
+        if p0 == 0 or b0 == 0:
+            return []
+        return [
+            1.0 + ((proxy_by_date[date] - p0) / p0) - ((benchmark_by_date[date] - b0) / b0)
+            for date in dates
+        ]
     n = min(len(proxy_closes), len(benchmark_closes))
     p0 = proxy_closes[0]
     b0 = benchmark_closes[0]
@@ -245,8 +277,30 @@ def compute_relative_path_label(proxy_closes: list[float], benchmark_closes: lis
     return out
 
 
-def compute_basket_path_label(paths: list[list[float]]) -> list[float]:
+def compute_basket_path_label(paths: list[list[Any]]) -> list[float]:
     """Return synthetic closes for an equal-weight basket of close paths."""
+    if any(_is_dated_path(path) for path in paths):
+        maps = [_dated_close_map(path) for path in paths if _is_dated_path(path) and len(path) >= 2]
+        if not maps:
+            return []
+        common_dates = set(maps[0])
+        for path_map in maps[1:]:
+            common_dates &= set(path_map)
+        dates = sorted(common_dates)
+        if len(dates) < 2:
+            return []
+        bases = [path_map[dates[0]] for path_map in maps]
+        if any(base == 0 for base in bases):
+            return []
+        out: list[float] = []
+        for date in dates:
+            returns = [
+                (path_map[date] - base) / base
+                for path_map, base in zip(maps, bases)
+            ]
+            out.append(1.0 + (sum(returns) / len(returns)))
+        return out
+
     usable = [path for path in paths if len(path) >= 2 and path[0] != 0]
     if not usable:
         return []

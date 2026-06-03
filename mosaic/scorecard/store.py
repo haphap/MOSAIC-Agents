@@ -884,6 +884,33 @@ class ScorecardStore:
                 for r in conn.execute(sql, params).fetchall()
             ]
 
+    def list_macro_signals(
+        self,
+        cohort: str,
+        *,
+        since_date: Optional[str] = None,
+        before_date: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Return raw macro signal rows, regardless of scoring status."""
+        sql = (
+            "SELECT id, cohort, agent, date, vote, confidence, label_type, "
+            "       label_source_status, label_value_5d, benchmark_return_5d, "
+            "       terminal_return_5d, max_drawdown_5d, realized_volatility_5d, "
+            "       path_metric_5d, source_series_id, realized_label, hit_5d, raw_macro_score_5d, "
+            "       influence_weight_equal, effective_macro_score_5d, scored_at "
+            "FROM macro_signals WHERE cohort = ?"
+        )
+        params: list[Any] = [cohort]
+        if since_date:
+            sql += " AND date >= ?"
+            params.append(since_date)
+        if before_date:
+            sql += " AND date <= ?"
+            params.append(before_date)
+        sql += " ORDER BY date, id"
+        with self._connect() as conn:
+            return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
     def update_macro_scoring(self, row_id: int, fields: dict[str, Any]) -> None:
         """Fill macro scoring columns for one row. ``fields`` keys are column names."""
         allowed = {

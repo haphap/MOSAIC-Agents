@@ -18,8 +18,10 @@ re-attempted forever).
 from __future__ import annotations
 
 import logging
+import math
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -312,11 +314,56 @@ def _macro_full_label_sources_enabled() -> bool:
         return False
 
 
-def _fetch_benchmark_series(ts_code: str, start_iso: str, end_iso: str) -> list[float]:
-    """Benchmark index closes over [start, end] (chronological). [] on failure.
+def _normalise_series_date(value: Any) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if len(raw) >= 8 and raw[:8].isdigit():
+        return f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+    normalised = raw.replace("/", "-")
+    for sep in ("T", " "):
+        normalised = normalised.split(sep, 1)[0]
+    try:
+        return datetime.fromisoformat(normalised).date().isoformat()
+    except ValueError:
+        return normalised[:10] if len(normalised) >= 10 else None
 
-    Used only to estimate trailing realized vol for ``vol_scale_5d``.
-    """
+
+def _dated_close_values_from_df(df) -> list[tuple[str, float]]:
+    """Extract chronological ``(date, close)`` points from a vendor DataFrame."""
+    if df is None or getattr(df, "empty", True):
+        return []
+    try:
+        rows = df.copy()
+        date_col = None
+        for candidate in ("trade_date", "date", "nav_date", "datetime", "time"):
+            if candidate in rows.columns:
+                date_col = candidate
+                break
+        value_col = None
+        for candidate in ("close", "bid_close", "ask_close", "settle", "adj_nav", "unit_nav", "value"):
+            if candidate in rows.columns:
+                value_col = candidate
+                break
+        if date_col is None or value_col is None:
+            return []
+        out: list[tuple[str, float]] = []
+        for _, row in rows.iterrows():
+            date = _normalise_series_date(row.get(date_col))
+            value = row.get(value_col)
+            if date is None or value is None:
+                continue
+            close = float(value)
+            if math.isnan(close):
+                continue
+            out.append((date, close))
+        return sorted(out, key=lambda point: point[0])
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _fetch_benchmark_series_dated(ts_code: str, start_iso: str, end_iso: str) -> list[tuple[str, float]]:
+    """Benchmark index closes over [start, end] as dated points."""
     try:
         from mosaic.dataflows.tushare import (  # type: ignore[attr-defined]
             _get_pro_client,
@@ -328,45 +375,27 @@ def _fetch_benchmark_series(ts_code: str, start_iso: str, end_iso: str) -> list[
         df = pro.index_daily(
             ts_code=norm, start_date=_to_api_date(start_iso), end_date=_to_api_date(end_iso)
         )
+        return _dated_close_values_from_df(df)
     except Exception as exc:  # noqa: BLE001
         logger.warning("benchmark series fetch failed for %s: %s", ts_code, exc)
         return []
-    if df is None or df.empty:
-        return []
-    try:
-        df = df.sort_values("trade_date")
-        return [float(x) for x in df["close"].tolist()]
-    except Exception:  # noqa: BLE001
-        return []
+
+
+def _fetch_benchmark_series(ts_code: str, start_iso: str, end_iso: str) -> list[float]:
+    """Benchmark index closes over [start, end] (chronological). [] on failure.
+
+    Used only to estimate trailing realized vol for ``vol_scale_5d``.
+    """
+    return [close for _, close in _fetch_benchmark_series_dated(ts_code, start_iso, end_iso)]
 
 
 def _close_values_from_df(df) -> list[float]:
     """Extract chronological close-like values from a vendor DataFrame."""
-    if df is None or getattr(df, "empty", True):
-        return []
-    try:
-        rows = df.copy()
-        date_col = None
-        for candidate in ("trade_date", "date", "nav_date", "datetime", "time"):
-            if candidate in rows.columns:
-                date_col = candidate
-                break
-        if date_col:
-            rows = rows.sort_values(date_col)
-        value_col = None
-        for candidate in ("close", "bid_close", "ask_close", "settle", "adj_nav", "unit_nav", "value"):
-            if candidate in rows.columns:
-                value_col = candidate
-                break
-        if value_col is None:
-            return []
-        return [float(x) for x in rows[value_col].tolist() if x is not None]
-    except Exception:  # noqa: BLE001
-        return []
+    return [close for _, close in _dated_close_values_from_df(df)]
 
 
-def _fetch_instrument_series(symbol: str, start_iso: str, end_iso: str) -> list[float]:
-    """Fetch close-like values for a macro proxy instrument.
+def _fetch_instrument_series_dated(symbol: str, start_iso: str, end_iso: str) -> list[tuple[str, float]]:
+    """Fetch dated close-like values for a macro proxy instrument.
 
     Supports the Tushare families used by macro label configs: FXCM FX pairs,
     commodity futures, A-share indices/ETFs, and regular A-share/HK/US symbols.
@@ -386,10 +415,10 @@ def _fetch_instrument_series(symbol: str, start_iso: str, end_iso: str) -> list[
         upper = symbol.strip().upper()
         if upper.endswith(".FXCM"):
             df = pro.fx_daily(ts_code=upper, start_date=start_api, end_date=end_api)
-            return _close_values_from_df(df)
+            return _dated_close_values_from_df(df)
         if upper.rsplit(".", 1)[-1] in {"INE", "SHF", "DCE", "CZC", "CFFEX", "GFEX"}:
             df = pro.query("fut_daily", ts_code=upper, start_date=start_api, end_date=end_api)
-            return _close_values_from_df(df)
+            return _dated_close_values_from_df(df)
 
         norm = _normalize_ts_code(upper)
         if _is_a_share_index(norm):
@@ -398,10 +427,15 @@ def _fetch_instrument_series(symbol: str, start_iso: str, end_iso: str) -> list[
             df = pro.fund_daily(ts_code=norm, start_date=start_api, end_date=end_api)
         else:
             df = _fetch_price_data(pro, norm, start_api, end_api)
-        return _close_values_from_df(df)
+        return _dated_close_values_from_df(df)
     except Exception as exc:  # noqa: BLE001
         logger.warning("macro proxy series fetch failed for %s: %s", symbol, exc)
         return []
+
+
+def _fetch_instrument_series(symbol: str, start_iso: str, end_iso: str) -> list[float]:
+    """Fetch close-like values for a macro proxy instrument."""
+    return [close for _, close in _fetch_instrument_series_dated(symbol, start_iso, end_iso)]
 
 
 def _fallback_benchmark_closes(
@@ -471,8 +505,8 @@ def _fetch_macro_label_closes(
 
     if config.path_kind == "relative":
         symbol = config.primary_symbols[0]
-        proxy = _fetch_instrument_series(symbol, start_iso, end_iso)
-        bench = _fetch_benchmark_series(benchmark, start_iso, end_iso)
+        proxy = _fetch_instrument_series_dated(symbol, start_iso, end_iso)
+        bench = _fetch_benchmark_series_dated(benchmark, start_iso, end_iso)
         rel = compute_relative_path_label(proxy, bench)
         if len(rel) >= 2:
             return (
@@ -485,7 +519,7 @@ def _fetch_macro_label_closes(
 
     if config.path_kind == "basket":
         paths = [
-            _fetch_instrument_series(symbol, start_iso, end_iso)
+            _fetch_instrument_series_dated(symbol, start_iso, end_iso)
             for symbol in config.primary_symbols
         ]
         basket = compute_basket_path_label(paths)

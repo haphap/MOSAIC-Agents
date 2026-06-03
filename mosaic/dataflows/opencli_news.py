@@ -4,14 +4,23 @@ import hashlib
 import functools
 import json
 import logging
+import re
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 from .exceptions import DataVendorUnavailable
 
 logger = logging.getLogger(__name__)
+
+_COMPACT_DATE_RE = re.compile(r"(?<!\d)(?P<year>19\d{2}|20\d{2})(?P<month>0[1-9]|1[0-2])(?P<day>0[1-9]|[12]\d|3[01])(?!\d)")
+_COMPACT_MONTH_RE = re.compile(r"(?<!\d)(?P<year>19\d{2}|20\d{2})(?P<month>0[1-9]|1[0-2])(?!\d)")
+_SEPARATED_DATE_RE = re.compile(
+    r"(?<!\d)(?P<year>19\d{2}|20\d{2})[-_/](?P<month>0?[1-9]|1[0-2])[-_/](?P<day>0?[1-9]|[12]\d|3[01])(?!\d)"
+)
+_SEPARATED_MONTH_RE = re.compile(r"(?<!\d)(?P<year>19\d{2}|20\d{2})[-_/](?P<month>0?[1-9]|1[0-2])(?!\d)")
 
 
 MACRO_AGENT_QUERY_BUNDLES: dict[str, tuple[str, ...]] = {
@@ -70,6 +79,15 @@ MACRO_AGENT_QUERY_BUNDLES: dict[str, tuple[str, ...]] = {
 
 def _parse_date(date_str: str) -> datetime:
     return datetime.strptime(date_str, "%Y-%m-%d")
+
+
+def _date_windowed_query(query: str, start_date: str, end_date: str) -> str:
+    before_date = (_parse_date(end_date) + timedelta(days=1)).strftime("%Y-%m-%d")
+    return f"{query} after:{start_date} before:{before_date}"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 @functools.lru_cache(maxsize=1)
@@ -678,20 +696,65 @@ def _parse_loose_date(value: str) -> datetime | None:
     try:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
+        pass
+    try:
+        return parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
         return None
 
 
-def _filter_items_by_window(items: list[dict], start_date: str, end_date: str) -> list[dict]:
+def _date_from_match(match: re.Match[str], *, default_day: int | None = None) -> datetime | None:
+    try:
+        day = int(match.groupdict().get("day") or default_day or 1)
+        return datetime(int(match.group("year")), int(match.group("month")), day)
+    except ValueError:
+        return None
+
+
+def _infer_date_from_text(value: str) -> datetime | None:
+    if not value:
+        return None
+    for regex, default_day in (
+        (_SEPARATED_DATE_RE, None),
+        (_COMPACT_DATE_RE, None),
+        (_SEPARATED_MONTH_RE, 1),
+        (_COMPACT_MONTH_RE, 1),
+    ):
+        match = regex.search(value)
+        if match:
+            parsed = _date_from_match(match, default_day=default_day)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _extract_item_date(item: dict) -> datetime | None:
+    raw = item.get("date") or item.get("datetime") or item.get("time") or item.get("published_at")
+    parsed = _parse_loose_date(str(raw)) if raw else None
+    if parsed is not None:
+        return parsed
+    for key in ("url", "title", "snippet", "desc", "content"):
+        parsed = _infer_date_from_text(str(item.get(key) or ""))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _filter_items_by_window(
+    items: list[dict],
+    start_date: str,
+    end_date: str,
+    *,
+    keep_undated: bool = False,
+) -> list[dict]:
     start_dt = _parse_date(start_date)
     end_dt = _parse_date(end_date)
     out: list[dict] = []
     for item in items:
-        raw = item.get("date") or item.get("datetime") or item.get("time") or item.get("published_at")
-        parsed = _parse_loose_date(str(raw)) if raw else None
+        parsed = _extract_item_date(item)
         if parsed is None:
-            # Keep undated records as evidence, but downstream must not promote
-            # them to primary event labels without a published_at timestamp.
-            out.append(item)
+            if keep_undated:
+                out.append(item)
             continue
         naive = parsed.replace(tzinfo=None)
         if start_dt <= naive <= end_dt:
@@ -744,6 +807,7 @@ def collect_macro_documents(
     *,
     agents: list[str] | None = None,
     per_query_limit: int = 5,
+    discovered_at: str | None = None,
 ) -> list[dict]:
     """Collect date-bounded OpenCLI documents for macro agents.
 
@@ -754,14 +818,15 @@ def collect_macro_documents(
     end_dt = _parse_date(curr_date)
     start_date = (end_dt - timedelta(days=look_back_days)).strftime("%Y-%m-%d")
     selected_agents = agents or sorted(MACRO_AGENT_QUERY_BUNDLES)
-    discovered_at = f"{curr_date}T23:59:59+08:00"
+    discovered_at = discovered_at or _now_iso()
     docs: list[dict] = []
     seen: set[str] = set()
     for agent in selected_agents:
         for query in MACRO_AGENT_QUERY_BUNDLES.get(agent, ()):
+            dated_query = _date_windowed_query(query, start_date, curr_date)
             calls = (
-                ("google_news", ["google", "news", query, "--limit", str(per_query_limit), "--format", "json"]),
-                ("google_search_zh", ["google", "search", query, "--lang", "zh", "--limit", str(per_query_limit), "--format", "json"]),
+                ("google_news", ["google", "news", dated_query, "--limit", str(per_query_limit), "--format", "json"]),
+                ("google_search_zh", ["google", "search", dated_query, "--lang", "zh", "--limit", str(per_query_limit), "--format", "json"]),
             )
             for channel, args in calls:
                 items, error = _safe_run_opencli(args)

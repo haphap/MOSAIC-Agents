@@ -49,7 +49,8 @@ def compare_label_sources(
     from mosaic.scorecard.store import PendingMacroRow
 
     last_trading_day = previous_trading_day(today, 0)
-    rows = store.list_scored_macro(cohort, since_date=since)
+    cutoff_5d = previous_trading_day(last_trading_day, 5)
+    rows = store.list_macro_signals(cohort, since_date=since, before_date=cutoff_5d)
 
     bench_scorer = MacroScorer(
         store, benchmark=benchmark, agent_specific_labels_enabled=True,

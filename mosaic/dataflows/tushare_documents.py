@@ -20,6 +20,7 @@ from mosaic.scorecard.macro_events import classify_document
 # Event-capable Tushare endpoints used as macro document sources. Kept small and
 # explicit; extend via the ``endpoints=`` arg as more are validated.
 _DEFAULT_DOC_ENDPOINTS: tuple[str, ...] = ("news",)
+_DEFAULT_NEWS_SOURCE = "sina"
 
 DocFetch = Callable[[str, str, str], list[dict]]
 
@@ -36,7 +37,13 @@ def _default_tushare_fetch(endpoint: str, start_date: str, end_date: str) -> lis
     )
 
     pro = _get_pro_client()
-    df = pro.query(endpoint, start_date=_to_api_date(start_date), end_date=_to_api_date(end_date))
+    params: dict[str, Any] = {
+        "start_date": _to_api_date(start_date),
+        "end_date": _to_api_date(end_date),
+    }
+    if endpoint in {"news", "llm_corpus_topic"}:
+        params["src"] = _DEFAULT_NEWS_SOURCE
+    df = pro.query(endpoint, **params)
     if df is None or getattr(df, "empty", True):
         return []
     return df.to_dict("records")
@@ -55,7 +62,7 @@ def crawl_macro_documents(
 
     ``discovered_at`` defaults to now (correct for a live crawl). One row per
     item, tagged with the endpoint's macro agents; deduped by content hash.
-    Returns ``{"endpoints", "fetched", "persisted"}``.
+    Returns ``{"endpoints", "fetched", "persisted", "errors"}``.
     """
     from mosaic.dataflows.tushare_catalog import catalog_by_endpoint
 
@@ -67,12 +74,14 @@ def crawl_macro_documents(
     rows: list[dict] = []
     seen: set[str] = set()
     fetched = 0
+    errors: list[dict[str, str]] = []
     for ep in eps:
         spec = catalog.get(ep) or {}
         agent_tags = list(spec.get("agent_tags") or ("news_sentiment",))
         try:
             items = fetch(ep, start_date, end_date)
-        except Exception:  # noqa: BLE001 - one bad endpoint shouldn't abort the crawl
+        except Exception as exc:  # noqa: BLE001 - one bad endpoint shouldn't abort the crawl
+            errors.append({"endpoint": ep, "error": f"{type(exc).__name__}: {exc}"})
             items = []
         for item in items or []:
             fetched += 1
@@ -93,4 +102,4 @@ def crawl_macro_documents(
             rows.append(row)
 
     persisted = store.append_macro_documents(rows) if rows else 0
-    return {"endpoints": eps, "fetched": fetched, "persisted": persisted}
+    return {"endpoints": eps, "fetched": fetched, "persisted": persisted, "errors": errors}

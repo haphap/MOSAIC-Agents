@@ -175,9 +175,9 @@ DEFAULT_CONFIG = {
         },
     },
     "darwinian": {
-        # Gated Phase 9 rewrite. Default OFF preserves the existing
-        # rolling-Sharpe-to-weight subsystem until explicitly validated.
-        "weight_rewrite_enabled": False,
+        # Phase 9 unified Darwinian evolution is the default path. Set this
+        # false to roll back to the legacy rolling-Sharpe-to-weight projection.
+        "weight_rewrite_enabled": True,
         "weight_start": 1.0,
         "weight_floor": 0.3,
         "weight_ceiling": 2.5,

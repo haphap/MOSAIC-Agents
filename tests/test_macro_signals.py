@@ -434,9 +434,13 @@ class TestMacroAgentSpecificLabels(unittest.TestCase):
         def fake_close(ts, date):
             return {d0: 100.0, t5: 102.0}.get(date)
 
+        dated = [(d0, 100.0), (_ntd(d0, 1), 101.0), (t5, 102.0)]
         with _cal_patch(), \
              patch("mosaic.scorecard.scorer._fetch_close", fake_close), \
-             patch("mosaic.scorecard.scorer._fetch_benchmark_series", lambda *a: [100, 101, 102]):
+             patch("mosaic.scorecard.scorer._fetch_benchmark_series", lambda *a: [100, 101, 102]), \
+             patch("mosaic.scorecard.scorer._fetch_instrument_series", lambda *a: [100, 101, 102]), \
+             patch("mosaic.scorecard.scorer._fetch_benchmark_series_dated", lambda *a: dated), \
+             patch("mosaic.scorecard.scorer._fetch_instrument_series_dated", lambda *a: dated):
             out = MacroScorer(store, benchmark="000300.SH", full_label_sources_enabled=True).score_pending("cohort_default", "2024-02-01")
 
         self.assertEqual(out["macro_scored"], 10)

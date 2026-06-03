@@ -162,6 +162,7 @@ def test_opencli_macro_document_collection_and_persistence(monkeypatch):
         look_back_days=7,
         agents=["central_bank"],
         per_query_limit=2,
+        discovered_at="2024-01-05T23:59:59+08:00",
     )
     assert calls
     assert docs
@@ -178,10 +179,88 @@ def test_opencli_macro_document_collection_and_persistence(monkeypatch):
             look_back_days=7,
             agents=["central_bank"],
             per_query_limit=2,
+            discovered_at="2024-01-05T23:59:59+08:00",
         )
         assert n == len(docs)
         persisted = store.list_macro_documents(agent="central_bank", discovered_at_lte="2024-01-05T23:59:59+08:00")
         assert len(persisted) == len(docs)
+
+
+def test_opencli_macro_document_collection_uses_crawl_time_by_default(monkeypatch):
+    def fake_safe_run(args):
+        return (
+            [
+                {
+                    "title": "PBOC adds liquidity",
+                    "url": "https://example.com/pboc",
+                    "date": "2024-01-02",
+                    "snippet": "central bank operation",
+                }
+            ],
+            None,
+        )
+
+    monkeypatch.setattr(opencli_news, "_safe_run_opencli", fake_safe_run)
+    monkeypatch.setattr(opencli_news, "_now_iso", lambda: "2026-06-03T00:00:00+00:00")
+    docs = opencli_news.collect_macro_documents(
+        "2024-01-05",
+        look_back_days=7,
+        agents=["central_bank"],
+        per_query_limit=1,
+    )
+    assert docs
+    assert all(doc["discovered_at"] == "2026-06-03T00:00:00+00:00" for doc in docs)
+
+
+def test_opencli_macro_document_collection_dates_queries_and_filters_rfc822(monkeypatch):
+    calls = []
+
+    def fake_safe_run(args):
+        calls.append(args)
+        return (
+            [
+                {
+                    "title": "China's response to the global financial crisis",
+                    "url": "https://example.com/2010",
+                    "date": "Sun, 24 Jan 2010 08:00:00 GMT",
+                    "snippet": "January 2010 macro policy coverage",
+                },
+                {
+                    "title": "Current PBOC framework",
+                    "url": "https://example.com/current",
+                    "date": "Tue, 17 Jun 2025 03:49:49 GMT",
+                    "snippet": "should not be kept for a 2010 window",
+                },
+                {
+                    "title": "Focusing on Bank Interest Rate Risk Exposure",
+                    "url": "https://www.federalreserve.gov/newsevents/speech/kohn20100129a.htm",
+                    "snippet": "undated Google Search result with date embedded in URL",
+                },
+                {
+                    "title": "Undated unrelated result",
+                    "url": "https://example.com/current",
+                    "snippet": "no trustworthy publication date",
+                },
+            ],
+            None,
+        )
+
+    monkeypatch.setattr(opencli_news, "_safe_run_opencli", fake_safe_run)
+    docs = opencli_news.collect_macro_documents(
+        "2010-01-31",
+        look_back_days=30,
+        agents=["central_bank"],
+        per_query_limit=2,
+        discovered_at="2026-06-03T00:00:00+00:00",
+    )
+
+    assert calls
+    assert all("after:2010-01-01 before:2010-02-01" in args[2] for args in calls)
+    titles = {doc["title"] for doc in docs}
+    assert "China's response to the global financial crisis" in titles
+    assert "Focusing on Bank Interest Rate Risk Exposure" in titles
+    assert "Current PBOC framework" not in titles
+    assert "Undated unrelated result" not in titles
 
 
 def test_macro_label_source_store_and_all_primary_configs():
@@ -247,6 +326,18 @@ def test_relative_and_basket_path_helpers():
     assert relative == pytest.approx([1.0, 1.03])
     basket = compute_basket_path_label([[100.0, 110.0], [200.0, 190.0]])
     assert basket == pytest.approx([1.0, 1.025])
+    dated_relative = compute_relative_path_label(
+        [("2024-01-01", 100.0), ("2024-01-03", 104.0)],
+        [("2024-01-01", 100.0), ("2024-01-02", 100.5), ("2024-01-03", 101.0)],
+    )
+    assert dated_relative == pytest.approx([1.0, 1.03])
+    dated_basket = compute_basket_path_label(
+        [
+            [("2024-01-01", 100.0), ("2024-01-02", 105.0), ("2024-01-03", 110.0)],
+            [("2024-01-01", 200.0), ("2024-01-03", 210.0)],
+        ]
+    )
+    assert dated_basket == pytest.approx([1.0, 1.075])
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +409,36 @@ def test_scorer_default_gate_off_keeps_proxy_agent_off_path_label(tmp_path):
     assert row["label_type"] != "cny_pressure_path_5d"  # rolled back to PR #73 behavior
 
 
+def test_scorer_relative_label_falls_back_when_dates_do_not_overlap(tmp_path):
+    store = ScorecardStore(db_path=os.path.join(tmp_path, "t.db"))
+    d0 = "2024-01-02"
+    store.append_macro_signals_from_state(
+        _macro_state(
+            {"central_bank": {"agent": "central_bank", "stance": "ACCOMMODATIVE", "confidence": 0.7}},
+            d0,
+        )
+    )
+    t5 = _ntd(d0, 5)
+    proxy = [(d0, 100.0), (t5, 104.0)]
+    benchmark = [(d0, 100.0), (_ntd(d0, 1), 101.0)]
+    with _cal(), \
+         patch("mosaic.scorecard.scorer._fetch_close", lambda ts, date: {d0: 100.0, t5: 102.0}.get(date)), \
+         patch("mosaic.scorecard.scorer._fetch_benchmark_series", lambda *a: [100.0, 102.0]), \
+         patch("mosaic.scorecard.scorer._fetch_benchmark_series_dated", lambda *a: benchmark), \
+         patch("mosaic.scorecard.scorer._fetch_instrument_series_dated", lambda *a: proxy):
+        MacroScorer(store, benchmark="000300.SH", full_label_sources_enabled=True).score_pending(
+            "cohort_default", "2024-02-01"
+        )
+
+    with store._connect() as conn:
+        row = conn.execute(
+            "SELECT label_type, label_source_status, source_series_id FROM macro_signals"
+        ).fetchone()
+    assert row["label_type"] == "rate_sensitive_path_5d"
+    assert row["label_source_status"] == "fallback"
+    assert row["source_series_id"].startswith("fallback:benchmark:")
+
+
 def test_p6_integration_ingest_score_skill_select(tmp_path):
     store = ScorecardStore(db_path=os.path.join(tmp_path, "t.db"))
     d0 = "2024-01-02"
@@ -335,10 +456,13 @@ def test_p6_integration_ingest_score_skill_select(tmp_path):
     }
     assert store.append_macro_signals_from_state(_macro_state(outputs, d0)) == 10
     t5 = _ntd(d0, 5)
+    dated = [(d0, 100.0), (_ntd(d0, 1), 101.0), (t5, 102.0)]
     with _cal(), \
          patch("mosaic.scorecard.scorer._fetch_close", lambda ts, date: {d0: 100.0, t5: 102.0}.get(date)), \
          patch("mosaic.scorecard.scorer._fetch_benchmark_series", lambda *a: [100, 101, 102]), \
-         patch("mosaic.scorecard.scorer._fetch_instrument_series", lambda *a: [100, 101, 102]):
+         patch("mosaic.scorecard.scorer._fetch_instrument_series", lambda *a: [100, 101, 102]), \
+         patch("mosaic.scorecard.scorer._fetch_benchmark_series_dated", lambda *a: dated), \
+         patch("mosaic.scorecard.scorer._fetch_instrument_series_dated", lambda *a: dated):
         out = MacroScorer(store, benchmark="000300.SH", full_label_sources_enabled=True).score_pending(
             "cohort_default", "2024-02-01"
         )
@@ -356,7 +480,7 @@ def test_p6_integration_ingest_score_skill_select(tmp_path):
 
 import json as _json  # noqa: E402
 
-from mosaic.dataflows.tushare_documents import crawl_macro_documents  # noqa: E402
+from mosaic.dataflows.tushare_documents import crawl_macro_documents, _default_tushare_fetch  # noqa: E402
 from mosaic.scorecard.macro_backtest import compare_label_sources  # noqa: E402
 
 
@@ -373,14 +497,14 @@ def test_compare_label_sources_reports_both_families(tmp_path):
         )
     )
     t5 = _ntd(d0, 5)
+    dated = [(d0, 100.0), (_ntd(d0, 1), 101.0), (t5, 103.0)]
     with _cal(), \
          patch("mosaic.scorecard.scorer._fetch_close", lambda ts, date: {d0: 100.0, t5: 103.0}.get(date)), \
          patch("mosaic.scorecard.scorer._fetch_benchmark_series", lambda *a: [100, 101, 103]), \
-         patch("mosaic.scorecard.scorer._fetch_instrument_series", lambda *a: [100, 101, 103]):
-        # score so the signals are matured/persisted, then compare both ways
-        MacroScorer(store, benchmark="000300.SH", full_label_sources_enabled=True).score_pending(
-            "cohort_default", "2024-02-01"
-        )
+         patch("mosaic.scorecard.scorer._fetch_instrument_series", lambda *a: [100, 101, 103]), \
+         patch("mosaic.scorecard.scorer._fetch_benchmark_series_dated", lambda *a: dated), \
+         patch("mosaic.scorecard.scorer._fetch_instrument_series_dated", lambda *a: dated):
+        # Compare matured raw macro_signals read-only; normal scoring has not run.
         report = compare_label_sources(store, "cohort_default", today="2024-02-01")
 
     assert report["n_signals"] == 2
@@ -389,6 +513,9 @@ def test_compare_label_sources_reports_both_families(tmp_path):
     assert report["agent_specific"]["n"] == 2
     assert 0.0 <= report["agent_specific"]["primary_rate"] <= 1.0
     assert set(report["delta"]) == {"mean_raw", "hit_rate", "sharpe"}
+    with store._connect() as conn:
+        scored = conn.execute("SELECT COUNT(*) FROM macro_signals WHERE scored_at IS NOT NULL").fetchone()[0]
+    assert scored == 0
 
 
 def test_crawl_macro_documents_persists_dedupes_and_tags(tmp_path):
@@ -426,6 +553,47 @@ def test_crawl_macro_documents_persists_dedupes_and_tags(tmp_path):
     risk = _json.loads(by_title["地缘冲突升级"]["event_tags_json"])
     assert "geopolitical_escalation" in risk
     assert by_title["地缘冲突升级"]["sentiment_score"] < 0
+
+
+def test_default_tushare_news_fetch_supplies_src(monkeypatch):
+    import pandas as pd
+    import mosaic.dataflows.tushare as tushare_mod
+
+    captured = {}
+
+    class FakePro:
+        def query(self, endpoint, **params):
+            captured["endpoint"] = endpoint
+            captured["params"] = params
+            return pd.DataFrame(
+                [{"title": "央行宣布降准", "content": "释放流动性", "datetime": "2024-01-02 09:00:00"}]
+            )
+
+    monkeypatch.setattr(tushare_mod, "_get_pro_client", lambda: FakePro())
+    rows = _default_tushare_fetch("news", "2024-01-01", "2024-01-05")
+    assert rows
+    assert captured["endpoint"] == "news"
+    assert captured["params"]["src"] == "sina"
+    assert captured["params"]["start_date"] == "20240101"
+    assert captured["params"]["end_date"] == "20240105"
+
+
+def test_crawl_macro_documents_reports_endpoint_errors(tmp_path):
+    store = ScorecardStore(db_path=os.path.join(tmp_path, "t.db"))
+
+    def failing_fetch(ep, start, end):
+        raise RuntimeError("vendor unavailable")
+
+    out = crawl_macro_documents(
+        store,
+        start_date="2024-01-01",
+        end_date="2024-01-05",
+        endpoints=["news"],
+        fetch=failing_fetch,
+    )
+    assert out["fetched"] == 0
+    assert out["persisted"] == 0
+    assert out["errors"] == [{"endpoint": "news", "error": "RuntimeError: vendor unavailable"}]
 
 
 from mosaic.scorecard.macro_events import (  # noqa: E402

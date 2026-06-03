@@ -134,6 +134,9 @@ def scorecard_score_pending(params: dict[str, Any]) -> dict[str, Any]:
                 agent_specific_labels_enabled=ar_cfg.get(
                     "macro_agent_specific_labels_enabled"
                 ),
+                full_label_sources_enabled=ar_cfg.get(
+                    "macro_full_label_sources_enabled"
+                ),
             ).score_pending(cohort=cohort, today=today)
         )
         return result
