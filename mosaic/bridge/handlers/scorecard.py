@@ -170,6 +170,31 @@ def scorecard_list_macro_skill(params: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# scorecard.compare_macro_label_sources (P6 rollout-gate backtest comparison)
+# ---------------------------------------------------------------------------
+
+
+@method("scorecard.compare_macro_label_sources")
+def scorecard_compare_macro_label_sources(params: dict[str, Any]) -> dict[str, Any]:
+    """Compare benchmark-fallback vs agent-specific macro scoring over matured
+    signals (read-only; no persistence). Informs the P6 rollout gate.
+
+    Params: cohort (str), today (str YYYY-MM-DD), since (str, optional).
+    """
+    cohort = _require_str(params, "cohort")
+    today = _require_str(params, "today")
+    since: Optional[str] = params.get("since") or None
+    if since is not None and not isinstance(since, str):
+        raise RpcError(INVALID_PARAMS, "'since' must be a string when provided")
+    try:
+        from mosaic.scorecard.macro_backtest import compare_label_sources
+
+        return compare_label_sources(_store(), cohort, today=today, since=since)
+    except Exception as exc:
+        raise RpcError(INTERNAL_ERROR, f"{type(exc).__name__}: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
 # scorecard.list_skill
 # ---------------------------------------------------------------------------
 

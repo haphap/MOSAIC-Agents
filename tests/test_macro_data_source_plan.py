@@ -348,3 +348,71 @@ def test_p6_integration_ingest_score_skill_select(tmp_path):
     now = _dt.datetime(2024, 3, 1, tzinfo=_dt.timezone.utc)
     chosen = _select_agent(store, "cohort_default", None, DEFAULT_CONFIG, now)
     assert _LAYER_BY_AGENT[chosen] == "macro"  # selection picks a scored macro agent
+
+
+# ---------------------------------------------------------------------------
+# Backtest comparison harness + Tushare document crawler
+# ---------------------------------------------------------------------------
+
+import json as _json  # noqa: E402
+
+from mosaic.dataflows.tushare_documents import crawl_macro_documents  # noqa: E402
+from mosaic.scorecard.macro_backtest import compare_label_sources  # noqa: E402
+
+
+def test_compare_label_sources_reports_both_families(tmp_path):
+    store = ScorecardStore(db_path=os.path.join(tmp_path, "t.db"))
+    d0 = "2024-01-02"
+    store.append_macro_signals_from_state(
+        _macro_state(
+            {
+                "volatility": {"agent": "volatility", "regime_filter": "RISK_ON", "confidence": 0.7},
+                "dollar": {"agent": "dollar", "dxy_trend": "WEAKENING", "confidence": 0.6},
+            },
+            d0,
+        )
+    )
+    t5 = _ntd(d0, 5)
+    with _cal(), \
+         patch("mosaic.scorecard.scorer._fetch_close", lambda ts, date: {d0: 100.0, t5: 103.0}.get(date)), \
+         patch("mosaic.scorecard.scorer._fetch_benchmark_series", lambda *a: [100, 101, 103]), \
+         patch("mosaic.scorecard.scorer._fetch_instrument_series", lambda *a: [100, 101, 103]):
+        # score so the signals are matured/persisted, then compare both ways
+        MacroScorer(store, benchmark="000300.SH", full_label_sources_enabled=True).score_pending(
+            "cohort_default", "2024-02-01"
+        )
+        report = compare_label_sources(store, "cohort_default", today="2024-02-01")
+
+    assert report["n_signals"] == 2
+    assert set(report["by_agent"]) == {"volatility", "dollar"}
+    assert report["benchmark"]["n"] == 2
+    assert report["agent_specific"]["n"] == 2
+    assert 0.0 <= report["agent_specific"]["primary_rate"] <= 1.0
+    assert set(report["delta"]) == {"mean_raw", "hit_rate", "sharpe"}
+
+
+def test_crawl_macro_documents_persists_dedupes_and_tags(tmp_path):
+    store = ScorecardStore(db_path=os.path.join(tmp_path, "t.db"))
+    items = [
+        {"title": "央行宣布降准", "content": "释放流动性", "datetime": "2024-01-02 09:00:00"},
+        {"title": "地缘冲突升级", "content": "避险升温", "datetime": "2024-01-03 10:00:00"},
+        {"title": "央行宣布降准", "content": "释放流动性", "datetime": "2024-01-02 09:00:00"},  # dup
+    ]
+    out = crawl_macro_documents(
+        store,
+        start_date="2024-01-01",
+        end_date="2024-01-05",
+        discovered_at="2024-01-06T00:00:00+00:00",
+        fetch=lambda ep, s, e: items,
+    )
+    assert out["fetched"] == 3
+    assert out["persisted"] == 2  # third item deduped by content hash
+    with store._connect() as conn:
+        rows = conn.execute(
+            "SELECT discovered_at, agent_tags_json, published_at FROM macro_documents"
+        ).fetchall()
+    assert len(rows) == 2
+    assert all(r["discovered_at"] == "2024-01-06T00:00:00+00:00" for r in rows)
+    tags = _json.loads(rows[0]["agent_tags_json"])
+    assert "news_sentiment" in tags  # news endpoint's macro agents
+    assert all(r["published_at"] for r in rows)
