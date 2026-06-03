@@ -15,6 +15,7 @@
 | `autoresearch` | cooldown / lockout / keep 阈值 / 月度上限 / 评估窗口 + opt-in `git` push |
 | `mirofish` | `engine` / `scorer` / `inject_context`(均 opt-in;默认 montecarlo / terminal / off) |
 | `data_vendors`、`tool_vendors` | 逐类别数据源选择 |
+| `agent_data_cache` | routed agent tool 数据的永久 SQLite 缓存(`enabled` 默认 true;`db_path` 可选) |
 
 ## 持久化模型
 
@@ -29,4 +30,4 @@
 
 ## 环境覆盖
 
-除[快速上手](Getting-Started.md)的键外:`MOSAIC_PYTHON`(解释器)、`MOSAIC_DATA_DIR` / `MOSAIC_RESULTS_DIR` / `MOSAIC_CACHE_DIR`(产物根)、`MOSAIC_BENCHMARK_TICKER`(评分基准)、`QLIB_CN_DATA_PATH` / `QLIB_CN_ETF_PATH`(qlib 数据集)、`MOSAIC_QLIB_REPO` / `MOSAIC_QLIB_ETF_COLLECTOR`(采集器发现)、`MOSAIC_MIROFISH_URL`(OASIS 引擎)。
+除[快速上手](Getting-Started.md)的键外:`MOSAIC_PYTHON`(解释器)、`MOSAIC_DATA_DIR` / `MOSAIC_RESULTS_DIR` / `MOSAIC_CACHE_DIR`(产物根)、`MOSAIC_AGENT_DATA_CACHE_ENABLED` / `MOSAIC_AGENT_DATA_CACHE_DB`(永久 routed tool 缓存)、`MOSAIC_BENCHMARK_TICKER`(评分基准)、`QLIB_CN_DATA_PATH` / `QLIB_CN_ETF_PATH`(qlib 数据集)、`MOSAIC_QLIB_REPO` / `MOSAIC_QLIB_ETF_COLLECTOR`(采集器发现)、`MOSAIC_MIROFISH_URL`(OASIS 引擎)。

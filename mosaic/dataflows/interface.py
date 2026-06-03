@@ -55,6 +55,7 @@ from .qlib_local import (
     get_stock as get_qlib_stock,
     get_indicator as get_qlib_indicator,
 )
+from .agent_data_cache import AgentDataCache
 from .exceptions import DataVendorUnavailable, MissingEtfHoldings
 
 # Configuration and routing logic
@@ -461,13 +462,28 @@ def is_a_share_ticker(ticker: str) -> bool:
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
     args, kwargs = _apply_backtest_date_bounds(method, args, kwargs)
+
+    if method not in VENDOR_METHODS:
+        raise ValueError(f"Method '{method}' not supported")
+
+    config = get_config()
+    agent_cache = AgentDataCache.from_config(config)
+    if agent_cache is not None:
+        try:
+            cached = agent_cache.get(method, args, kwargs)
+            if cached.hit:
+                return cached.value
+        except Exception as exc:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "agent data cache read failed for %s: %s", method, exc
+            )
+
     category = get_category_for_method(method)
     vendor_config = get_vendor(category, method)
     primary_vendors = [v.strip() for v in vendor_config.split(',')]
     last_error = None
-
-    if method not in VENDOR_METHODS:
-        raise ValueError(f"Method '{method}' not supported")
 
     # For Chinese market tickers, prefer qlib (local) then tushare.
     ticker = args[0] if args else kwargs.get("ticker") or kwargs.get("symbol") or ""
@@ -495,7 +511,27 @@ def route_to_vendor(method: str, *args, **kwargs):
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
 
         try:
-            return impl_func(*args, **kwargs)
+            result = impl_func(*args, **kwargs)
+            if agent_cache is not None:
+                try:
+                    agent_cache.set(
+                        method,
+                        args,
+                        kwargs,
+                        result,
+                        vendor=vendor,
+                        vendor_chain=fallback_vendors,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "agent data cache write failed for %s/%s: %s",
+                        method,
+                        vendor,
+                        exc,
+                    )
+            return result
         except DataVendorUnavailable as exc:
             last_error = exc
             continue  # Try next vendor in fallback chain

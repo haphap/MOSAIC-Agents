@@ -22,6 +22,13 @@ _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 _DEFAULT_DATA_DIR = os.path.join(_REPO_ROOT, "data")
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
 DEFAULT_CONFIG = {
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
     "data_dir": os.getenv("MOSAIC_DATA_DIR", _DEFAULT_DATA_DIR),
@@ -134,6 +141,13 @@ DEFAULT_CONFIG = {
     "snapshot_max_age_days": 30,
     "backtest_cache_max_age_days": 90,
     "checkpoint_max_age_days": 30,
+    # Permanent exact-call cache for every routed agent data tool. Cache hits
+    # return from SQLite before any vendor/API call; misses fetch through the
+    # normal fallback chain and write the successful result back to SQLite.
+    "agent_data_cache": {
+        "enabled": _env_bool("MOSAIC_AGENT_DATA_CACHE_ENABLED", True),
+        "db_path": os.getenv("MOSAIC_AGENT_DATA_CACHE_DB"),
+    },
     # ============== Cohorts (Phase 5 PRISM, Plan §9) ==============
     "active_cohort": "euphoria_2021",
     "cohorts": {
