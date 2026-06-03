@@ -114,6 +114,7 @@ export interface MosaicConfig {
     enabled?: boolean;
     db_path?: string | null;
     read_ttl_seconds?: number | null;
+    max_entries?: number | null;
   };
 
   // ----- MiroFish (Plan §11.8 / 7M) -----

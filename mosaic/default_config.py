@@ -161,6 +161,7 @@ DEFAULT_CONFIG = {
         "enabled": _env_bool("MOSAIC_AGENT_DATA_CACHE_ENABLED", True),
         "db_path": os.getenv("MOSAIC_AGENT_DATA_CACHE_DB"),
         "read_ttl_seconds": _env_int_or_none("MOSAIC_AGENT_DATA_CACHE_READ_TTL_SECONDS", 24 * 3600),
+        "max_entries": _env_int_or_none("MOSAIC_AGENT_DATA_CACHE_MAX_ENTRIES", 50_000),
     },
     # ============== Cohorts (Phase 5 PRISM, Plan §9) ==============
     "active_cohort": "euphoria_2021",

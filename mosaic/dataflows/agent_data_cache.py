@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 2
 _DEFAULT_READ_TTL_SECONDS = 24 * 3600
+_DEFAULT_MAX_ENTRIES = 50_000
 
 
 @dataclass(frozen=True)
@@ -33,7 +34,7 @@ class CacheLookup:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _as_bool(value: Any, default: bool = True) -> bool:
@@ -57,6 +58,21 @@ def _as_ttl_seconds(value: Any) -> int | None:
     except (TypeError, ValueError):
         return _DEFAULT_READ_TTL_SECONDS
     return seconds if seconds >= 0 else None
+
+
+def _as_max_entries(value: Any) -> int | None:
+    if value is None:
+        return _DEFAULT_MAX_ENTRIES
+    if isinstance(value, str):
+        stripped = value.strip().lower()
+        if stripped in {"", "none", "null", "off", "disabled"}:
+            return None
+        value = stripped
+    try:
+        entries = int(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_MAX_ENTRIES
+    return entries if entries > 0 else None
 
 
 def _normalise(value: Any) -> Any:
@@ -126,9 +142,16 @@ def _decode_result(result_format: str, payload: str) -> Any:
 class AgentDataCache:
     """SQLite-backed exact-call cache for routed agent data."""
 
-    def __init__(self, db_path: str | Path, *, read_ttl_seconds: int | None = _DEFAULT_READ_TTL_SECONDS) -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        read_ttl_seconds: int | None = _DEFAULT_READ_TTL_SECONDS,
+        max_entries: int | None = _DEFAULT_MAX_ENTRIES,
+    ) -> None:
         self.db_path = Path(db_path).expanduser()
         self.read_ttl_seconds = read_ttl_seconds
+        self.max_entries = max_entries
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "AgentDataCache | None":
@@ -139,7 +162,8 @@ class AgentDataCache:
         if not db_path:
             db_path = Path(config["data_cache_dir"]) / "agent_data" / "cache.sqlite3"
         ttl = _as_ttl_seconds(cache_cfg.get("read_ttl_seconds", _DEFAULT_READ_TTL_SECONDS))
-        return cls(db_path, read_ttl_seconds=ttl)
+        max_entries = _as_max_entries(cache_cfg.get("max_entries", _DEFAULT_MAX_ENTRIES))
+        return cls(db_path, read_ttl_seconds=ttl, max_entries=max_entries)
 
     def get(
         self,
@@ -252,7 +276,30 @@ class AgentDataCache:
                     now,
                 ),
             )
+            self._enforce_max_entries(conn)
         return True
+
+    def _enforce_max_entries(self, conn: sqlite3.Connection) -> None:
+        if self.max_entries is None:
+            return
+        count = conn.execute("SELECT COUNT(*) FROM agent_data_cache").fetchone()[0]
+        overflow = int(count) - self.max_entries
+        if overflow <= 0:
+            return
+        conn.execute(
+            """
+            DELETE FROM agent_data_cache
+             WHERE cache_key IN (
+                SELECT cache_key
+                  FROM agent_data_cache
+                 ORDER BY COALESCE(last_accessed_at, updated_at, created_at) ASC,
+                          updated_at ASC,
+                          cache_key ASC
+                 LIMIT ?
+             )
+            """,
+            (overflow,),
+        )
 
     def stats(self) -> dict[str, Any]:
         if not self.db_path.is_file():

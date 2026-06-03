@@ -182,6 +182,34 @@ def test_stale_cache_entry_is_refetched(monkeypatch):
     ]
 
 
+def test_max_entries_prunes_least_recently_used_entries(monkeypatch):
+    set_config(
+        {
+            "data_cache_dir": get_config()["data_cache_dir"],
+            "tool_vendors": {"get_fred_series": "fred"},
+            "agent_data_cache": {"enabled": True, "max_entries": 2},
+        }
+    )
+    calls = []
+
+    def fake_fred(series_id, *args):
+        calls.append(series_id)
+        return f"{series_id}-payload-{len(calls)}"
+
+    monkeypatch.setitem(interface.VENDOR_METHODS, "get_fred_series", {"fred": fake_fred})
+
+    assert interface.route_to_vendor("get_fred_series", "A", "2024-01-01", "2024-01-31") == "A-payload-1"
+    assert interface.route_to_vendor("get_fred_series", "B", "2024-01-01", "2024-01-31") == "B-payload-2"
+    assert interface.route_to_vendor("get_fred_series", "A", "2024-01-01", "2024-01-31") == "A-payload-1"
+    assert interface.route_to_vendor("get_fred_series", "C", "2024-01-01", "2024-01-31") == "C-payload-3"
+    assert _cache().stats()["entries"] == 2
+
+    assert interface.route_to_vendor("get_fred_series", "A", "2024-01-01", "2024-01-31") == "A-payload-1"
+    assert interface.route_to_vendor("get_fred_series", "B", "2024-01-01", "2024-01-31") == "B-payload-4"
+    assert calls == ["A", "B", "C", "B"]
+    assert _cache().stats()["entries"] == 2
+
+
 def test_agent_data_cache_can_be_disabled(monkeypatch):
     set_config(
         {
