@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import functools
 import json
 import logging
@@ -11,6 +12,60 @@ from datetime import datetime, timedelta
 from .exceptions import DataVendorUnavailable
 
 logger = logging.getLogger(__name__)
+
+
+MACRO_AGENT_QUERY_BUNDLES: dict[str, tuple[str, ...]] = {
+    "central_bank": (
+        "PBOC MLF OMO liquidity",
+        "央行 公开市场操作 MLF 降准",
+        "FOMC Fed liquidity rates",
+    ),
+    "china": (
+        "国务院 发改委 财政部 经济政策",
+        "China growth policy property stimulus",
+        "中国 PMI GDP CPI PPI 政策",
+    ),
+    "geopolitical": (
+        "US China export controls sanctions Taiwan",
+        "geopolitical risk oil supply China market",
+        "中美 关税 制裁 地缘风险",
+    ),
+    "dollar": (
+        "US dollar yuan CNH Federal Reserve",
+        "人民币 汇率 美元指数 美债收益率",
+        "DXY CNY capital outflow China",
+    ),
+    "yield_curve": (
+        "China yield curve treasury bond yields",
+        "US 2s10s yield curve recession signal",
+        "国债收益率曲线 倒挂 流动性",
+    ),
+    "commodities": (
+        "oil copper gold iron ore China demand",
+        "原油 铜 黄金 铁矿石 中国需求",
+        "commodity supply shock China futures",
+    ),
+    "volatility": (
+        "VIX China market volatility risk off",
+        "A股 波动率 风险偏好 VIX",
+        "market drawdown volatility shock",
+    ),
+    "emerging_markets": (
+        "Hong Kong stocks emerging markets China ADR",
+        "港股 新兴市场 亚洲外汇 资金流",
+        "EM risk appetite dollar yuan",
+    ),
+    "news_sentiment": (
+        "财新 A股 市场情绪",
+        "A股 热点 情绪 同花顺 东方财富",
+        "China market sentiment retail investors",
+    ),
+    "institutional_flow": (
+        "A股 主力资金 行业资金流",
+        "龙虎榜 机构买入 ETF 份额",
+        "China A-share institutional flow sector rotation",
+    ),
+}
 
 
 def _parse_date(date_str: str) -> datetime:
@@ -604,3 +659,131 @@ def get_caixin_sentiment(curr_date: str, look_back_days: int = 7, limit: int = 1
     header = f"## 财新情绪 / Caixin Sentiment, {start_date} → {curr_date}:\n\n"
     return _date_cutoff_warning(curr_date) + header + block
 
+
+def _parse_loose_date(value: str) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    for fmt in (
+        "%Y-%m-%d",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%b %d, %Y",
+        "%B %d, %Y",
+    ):
+        try:
+            return datetime.strptime(raw[: max(len(raw), len(fmt))], fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _filter_items_by_window(items: list[dict], start_date: str, end_date: str) -> list[dict]:
+    start_dt = _parse_date(start_date)
+    end_dt = _parse_date(end_date)
+    out: list[dict] = []
+    for item in items:
+        raw = item.get("date") or item.get("datetime") or item.get("time") or item.get("published_at")
+        parsed = _parse_loose_date(str(raw)) if raw else None
+        if parsed is None:
+            # Keep undated records as evidence, but downstream must not promote
+            # them to primary event labels without a published_at timestamp.
+            out.append(item)
+            continue
+        naive = parsed.replace(tzinfo=None)
+        if start_dt <= naive <= end_dt:
+            out.append(item)
+    return out
+
+
+def _macro_document_hash(*parts: str) -> str:
+    material = "\n".join(part.strip() for part in parts if part and part.strip())
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _normalise_macro_document(
+    *,
+    item: dict,
+    agent: str,
+    query: str,
+    source: str,
+    channel: str,
+    discovered_at: str,
+) -> dict:
+    title = str(item.get("title") or item.get("text") or item.get("word") or item.get("content") or "").strip()
+    url = str(item.get("url") or item.get("link") or "").strip()
+    published_at = str(
+        item.get("date") or item.get("datetime") or item.get("time") or item.get("published_at") or ""
+    ).strip() or None
+    excerpt = str(item.get("content") or item.get("snippet") or item.get("desc") or title or "").strip()
+    content_hash = _macro_document_hash(source, channel, query, title, url, published_at or "", excerpt)
+    return {
+        "document_id": content_hash,
+        "source": source,
+        "channel": channel,
+        "query": query,
+        "title": title or None,
+        "url": url or None,
+        "published_at": published_at,
+        "discovered_at": discovered_at,
+        "content_hash": content_hash,
+        "content_excerpt": excerpt[:1000] if excerpt else None,
+        "agent_tags": [agent],
+        "event_tags": [],
+        "sentiment_score": None,
+        "quality_score": 1.0 if published_at else 0.5,
+    }
+
+
+def collect_macro_documents(
+    curr_date: str,
+    look_back_days: int = 7,
+    *,
+    agents: list[str] | None = None,
+    per_query_limit: int = 5,
+) -> list[dict]:
+    """Collect date-bounded OpenCLI documents for macro agents.
+
+    This function only collects and normalises evidence. Historical scoring
+    should read rows already persisted via ``macro_documents`` rather than call
+    OpenCLI in the scoring path.
+    """
+    end_dt = _parse_date(curr_date)
+    start_date = (end_dt - timedelta(days=look_back_days)).strftime("%Y-%m-%d")
+    selected_agents = agents or sorted(MACRO_AGENT_QUERY_BUNDLES)
+    discovered_at = f"{curr_date}T23:59:59+08:00"
+    docs: list[dict] = []
+    seen: set[str] = set()
+    for agent in selected_agents:
+        for query in MACRO_AGENT_QUERY_BUNDLES.get(agent, ()):
+            calls = (
+                ("google_news", ["google", "news", query, "--limit", str(per_query_limit), "--format", "json"]),
+                ("google_search_zh", ["google", "search", query, "--lang", "zh", "--limit", str(per_query_limit), "--format", "json"]),
+            )
+            for channel, args in calls:
+                items, error = _safe_run_opencli(args)
+                if error:
+                    logger.debug("macro OpenCLI collection failed for %s/%s: %s", agent, query, error)
+                    continue
+                for item in _filter_items_by_window(items, start_date, curr_date):
+                    row = _normalise_macro_document(
+                        item=item,
+                        agent=agent,
+                        query=query,
+                        source="opencli",
+                        channel=channel,
+                        discovered_at=discovered_at,
+                    )
+                    if row["content_hash"] in seen:
+                        continue
+                    seen.add(row["content_hash"])
+                    docs.append(row)
+    return docs
+
+
+def persist_macro_documents(store, curr_date: str, look_back_days: int = 7, **kwargs) -> int:
+    docs = collect_macro_documents(curr_date, look_back_days, **kwargs)
+    return store.append_macro_documents(docs) if docs else 0

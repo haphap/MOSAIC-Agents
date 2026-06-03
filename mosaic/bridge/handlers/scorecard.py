@@ -155,6 +155,8 @@ def scorecard_list_macro_skill(params: dict[str, Any]) -> dict[str, Any]:
     Params: cohort (str), since (str YYYY-MM-DD, optional).
     Returns {"rows": [{agent, n_obs, mean_raw_macro_score_5d, hit_rate_5d,
              mean_effective_macro_score_5d, mean_influence_weight_equal,
+             latest_label_type, label_source_status_counts,
+             primary_label_rate, fallback_label_rate, missing_label_rate,
              sharpe_window, latest_signal_date}, ...]}.
     """
     cohort = _require_str(params, "cohort")
