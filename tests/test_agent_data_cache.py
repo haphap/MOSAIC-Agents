@@ -85,6 +85,55 @@ def test_route_to_vendor_writes_successful_fallback_result(monkeypatch):
     assert row[1] == '["bad", "good"]'
 
 
+def test_vendor_chain_is_part_of_cache_key(monkeypatch):
+    calls = []
+
+    def first_vendor(*args):
+        calls.append(("first", args))
+        return "first payload"
+
+    def second_vendor(*args):
+        calls.append(("second", args))
+        return "second payload"
+
+    monkeypatch.setitem(
+        interface.VENDOR_METHODS,
+        "get_stock_data",
+        {"first": first_vendor, "second": second_vendor},
+    )
+    set_config(
+        {
+            "data_cache_dir": get_config()["data_cache_dir"],
+            "tool_vendors": {"get_stock_data": "first"},
+            "agent_data_cache": {"enabled": True},
+        }
+    )
+    assert interface.route_to_vendor("get_stock_data", "AAPL.US", "2024-01-01", "2024-01-31") == "first payload"
+
+    set_config(
+        {
+            "data_cache_dir": get_config()["data_cache_dir"],
+            "tool_vendors": {"get_stock_data": "second"},
+            "agent_data_cache": {"enabled": True},
+        }
+    )
+    assert interface.route_to_vendor("get_stock_data", "AAPL.US", "2024-01-01", "2024-01-31") == "second payload"
+
+    set_config(
+        {
+            "data_cache_dir": get_config()["data_cache_dir"],
+            "tool_vendors": {"get_stock_data": "first"},
+            "agent_data_cache": {"enabled": True},
+        }
+    )
+    assert interface.route_to_vendor("get_stock_data", "AAPL.US", "2024-01-01", "2024-01-31") == "first payload"
+    assert calls == [
+        ("first", ("AAPL.US", "2024-01-01", "2024-01-31")),
+        ("second", ("AAPL.US", "2024-01-01", "2024-01-31")),
+    ]
+    assert _cache().stats()["entries"] == 2
+
+
 def test_backtest_clamped_arguments_define_cache_key(monkeypatch):
     calls = []
 

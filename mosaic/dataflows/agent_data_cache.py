@@ -1,9 +1,10 @@
 """Permanent cache for agent tool data.
 
 The cache is intentionally generic: it stores the exact result returned by
-``route_to_vendor(method, *args, **kwargs)`` keyed by the method name plus the
-date-clamped arguments. That makes every agent tool cache-first without adding
-vendor-specific code to each dataflow module.
+``route_to_vendor(method, *args, **kwargs)`` keyed by the method name, the
+date-clamped arguments, and the selected vendor fallback chain. That makes
+every agent tool cache-first without adding vendor-specific code to each
+dataflow module, while still respecting vendor configuration changes.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _DEFAULT_READ_TTL_SECONDS = 24 * 3600
 
 
@@ -70,13 +71,20 @@ def _normalise(value: Any) -> Any:
     return repr(value)
 
 
-def _canonical_request(method: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+def _canonical_request(
+    method: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    vendor_chain: list[str],
+) -> str:
     return json.dumps(
         {
             "schema_version": _SCHEMA_VERSION,
             "method": method,
             "args": _normalise(args),
             "kwargs": _normalise(kwargs),
+            "vendor_chain": _normalise(vendor_chain),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -84,8 +92,15 @@ def _canonical_request(method: str, args: tuple[Any, ...], kwargs: dict[str, Any
     )
 
 
-def cache_key(method: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
-    return hashlib.sha256(_canonical_request(method, args, kwargs).encode("utf-8")).hexdigest()
+def cache_key(
+    method: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    vendor_chain: list[str],
+) -> str:
+    request_json = _canonical_request(method, args, kwargs, vendor_chain=vendor_chain)
+    return hashlib.sha256(request_json.encode("utf-8")).hexdigest()
 
 
 def _encode_result(value: Any) -> tuple[str, str] | None:
@@ -126,8 +141,15 @@ class AgentDataCache:
         ttl = _as_ttl_seconds(cache_cfg.get("read_ttl_seconds", _DEFAULT_READ_TTL_SECONDS))
         return cls(db_path, read_ttl_seconds=ttl)
 
-    def get(self, method: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> CacheLookup:
-        key = cache_key(method, args, kwargs)
+    def get(
+        self,
+        method: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        vendor_chain: list[str],
+    ) -> CacheLookup:
+        key = cache_key(method, args, kwargs, vendor_chain=vendor_chain)
         now = _now_iso()
         with self._connect() as conn:
             row = conn.execute(
@@ -183,8 +205,8 @@ class AgentDataCache:
             return False
 
         result_format, payload = encoded
-        request_json = _canonical_request(method, args, kwargs)
-        key = hashlib.sha256(request_json.encode("utf-8")).hexdigest()
+        request_json = _canonical_request(method, args, kwargs, vendor_chain=vendor_chain)
+        key = cache_key(method, args, kwargs, vendor_chain=vendor_chain)
         now = _now_iso()
         payload_bytes = len(payload.encode("utf-8"))
         with self._connect() as conn:

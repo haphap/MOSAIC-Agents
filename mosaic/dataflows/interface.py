@@ -467,10 +467,35 @@ def route_to_vendor(method: str, *args, **kwargs):
         raise ValueError(f"Method '{method}' not supported")
 
     config = get_config()
+    category = get_category_for_method(method)
+    tool_vendors = config.get("tool_vendors", {})
+    vendor_config = tool_vendors.get(method) or config.get("data_vendors", {}).get(category, "default")
+    primary_vendors = [v.strip() for v in str(vendor_config).split(',') if v.strip()]
+
+    # For Chinese market tickers, prefer qlib (local) then tushare.
+    ticker = args[0] if args else kwargs.get("ticker") or kwargs.get("symbol") or ""
+    if _is_chinese_ticker(ticker):
+        # Ensure qlib is first if available for this method, then tushare.
+        for preferred in reversed(["qlib", "tushare"]):
+            if preferred in VENDOR_METHODS[method] and preferred not in primary_vendors:
+                primary_vendors.insert(0, preferred)
+            elif preferred in VENDOR_METHODS[method] and (
+                not primary_vendors or primary_vendors[0] != preferred
+            ):
+                primary_vendors.remove(preferred)
+                primary_vendors.insert(0, preferred)
+
+    # Build fallback chain: primary vendors first, then remaining available vendors.
+    all_available_vendors = list(VENDOR_METHODS[method].keys())
+    fallback_vendors = primary_vendors.copy()
+    for vendor in all_available_vendors:
+        if vendor not in fallback_vendors:
+            fallback_vendors.append(vendor)
+
     agent_cache = AgentDataCache.from_config(config)
     if agent_cache is not None:
         try:
-            cached = agent_cache.get(method, args, kwargs)
+            cached = agent_cache.get(method, args, kwargs, vendor_chain=fallback_vendors)
             if cached.hit:
                 return cached.value
         except Exception as exc:  # noqa: BLE001
@@ -480,28 +505,7 @@ def route_to_vendor(method: str, *args, **kwargs):
                 "agent data cache read failed for %s: %s", method, exc
             )
 
-    category = get_category_for_method(method)
-    vendor_config = get_vendor(category, method)
-    primary_vendors = [v.strip() for v in vendor_config.split(',')]
     last_error = None
-
-    # For Chinese market tickers, prefer qlib (local) then tushare.
-    ticker = args[0] if args else kwargs.get("ticker") or kwargs.get("symbol") or ""
-    if _is_chinese_ticker(ticker):
-        # Ensure qlib is first if available for this method, then tushare
-        for preferred in reversed(["qlib", "tushare"]):
-            if preferred in VENDOR_METHODS[method] and preferred not in primary_vendors:
-                primary_vendors.insert(0, preferred)
-            elif preferred in VENDOR_METHODS[method] and primary_vendors[0] != preferred:
-                primary_vendors.remove(preferred)
-                primary_vendors.insert(0, preferred)
-
-    # Build fallback chain: primary vendors first, then remaining available vendors
-    all_available_vendors = list(VENDOR_METHODS[method].keys())
-    fallback_vendors = primary_vendors.copy()
-    for vendor in all_available_vendors:
-        if vendor not in fallback_vendors:
-            fallback_vendors.append(vendor)
 
     for vendor in fallback_vendors:
         if vendor not in VENDOR_METHODS[method]:
