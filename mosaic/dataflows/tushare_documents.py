@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from mosaic.dataflows.opencli_news import _normalise_macro_document
+from mosaic.scorecard.macro_events import classify_document
 
 # Event-capable Tushare endpoints used as macro document sources. Kept small and
 # explicit; extend via the ``endpoints=`` arg as more are validated.
@@ -84,6 +85,11 @@ def crawl_macro_documents(
             if h in seen:
                 continue
             seen.add(h)
+            # Deterministic event/sentiment classification at ingest (P4); the
+            # index reader stays look-ahead-safe regardless of when this runs.
+            classified = classify_document(row)
+            row["event_tags"] = classified["event_tags"]
+            row["sentiment_score"] = classified["sentiment_score"]
             rows.append(row)
 
     persisted = store.append_macro_documents(rows) if rows else 0

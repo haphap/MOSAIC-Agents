@@ -409,10 +409,91 @@ def test_crawl_macro_documents_persists_dedupes_and_tags(tmp_path):
     assert out["persisted"] == 2  # third item deduped by content hash
     with store._connect() as conn:
         rows = conn.execute(
-            "SELECT discovered_at, agent_tags_json, published_at FROM macro_documents"
+            "SELECT discovered_at, agent_tags_json, published_at, title, "
+            "event_tags_json, sentiment_score FROM macro_documents"
         ).fetchall()
     assert len(rows) == 2
     assert all(r["discovered_at"] == "2024-01-06T00:00:00+00:00" for r in rows)
     tags = _json.loads(rows[0]["agent_tags_json"])
     assert "news_sentiment" in tags  # news endpoint's macro agents
     assert all(r["published_at"] for r in rows)
+    # P4: crawler classifies at ingest — "央行宣布降准" → policy_support (risk-on),
+    # "地缘冲突升级" → geopolitical_escalation (risk-off).
+    by_title = {r["title"]: r for r in rows}
+    easing = _json.loads(by_title["央行宣布降准"]["event_tags_json"])
+    assert "policy_support" in easing
+    assert by_title["央行宣布降准"]["sentiment_score"] > 0
+    risk = _json.loads(by_title["地缘冲突升级"]["event_tags_json"])
+    assert "geopolitical_escalation" in risk
+    assert by_title["地缘冲突升级"]["sentiment_score"] < 0
+
+
+from mosaic.scorecard.macro_events import (  # noqa: E402
+    build_sentiment_index,
+    classify_persisted_documents,
+    classify_text,
+    event_orientation,
+)
+
+
+def test_classify_text_is_deterministic_and_bilingual():
+    up = classify_text("央行降准释放流动性，市场大涨 rally")
+    assert "policy_support" in up["event_tags"]
+    assert up["sentiment_score"] > 0
+    assert classify_text("央行降准释放流动性，市场大涨 rally") == up  # deterministic
+
+    down = classify_text("地缘冲突升级，避险情绪升温 selloff")
+    assert "geopolitical_escalation" in down["event_tags"]
+    assert "risk_off" in down["event_tags"]
+    assert down["sentiment_score"] < 0
+
+    neutral = classify_text("某公司发布季度公告")
+    assert neutral == {"event_tags": [], "sentiment_score": 0.0}
+
+
+def test_sentiment_index_is_point_in_time_and_requires_published_at(tmp_path):
+    store = ScorecardStore(db_path=os.path.join(tmp_path, "t.db"))
+    store.append_macro_documents(
+        [
+            # in-window, dated, discovered before as-of → counts
+            {"content_hash": "h1", "source": "tushare", "agent_tags": ["news_sentiment"],
+             "title": "市场大涨 rally 利好", "published_at": "2024-01-04",
+             "discovered_at": "2024-01-04T00:00:00+00:00"},
+            # discovered AFTER as-of → excluded (look-ahead)
+            {"content_hash": "h2", "source": "tushare", "agent_tags": ["news_sentiment"],
+             "title": "暴跌 risk-off", "published_at": "2024-01-04",
+             "discovered_at": "2024-01-09T00:00:00+00:00"},
+            # no published_at → evidence-only, never in index
+            {"content_hash": "h3", "source": "tushare", "agent_tags": ["news_sentiment"],
+             "title": "暴跌 risk-off", "published_at": None,
+             "discovered_at": "2024-01-04T00:00:00+00:00"},
+            # different agent → not counted for news_sentiment
+            {"content_hash": "h4", "source": "tushare", "agent_tags": ["dollar"],
+             "title": "暴跌 risk-off", "published_at": "2024-01-04",
+             "discovered_at": "2024-01-04T00:00:00+00:00"},
+        ]
+    )
+    classify_persisted_documents(store)
+    idx = build_sentiment_index(store, "news_sentiment", "2024-01-05", lookback_days=7)
+    assert idx["n_documents"] == 1  # only h1
+    assert idx["n_evidence_only"] == 1  # h3 (undated)
+    assert idx["sentiment_index"] > 0
+    orient = event_orientation(idx)
+    assert orient["orientation"] == 1
+    assert 0.0 <= orient["strength"] <= 1.0
+
+
+def test_classify_persisted_documents_is_idempotent_and_safe(tmp_path):
+    store = ScorecardStore(db_path=os.path.join(tmp_path, "t.db"))
+    store.append_macro_documents(
+        {"content_hash": "x1", "source": "tushare", "agent_tags": ["china"],
+         "title": "降准 stimulus", "published_at": "2024-01-04",
+         "discovered_at": "2024-01-04T00:00:00+00:00"}
+    )
+    first = classify_persisted_documents(store)
+    assert first["classified"] == 1
+    second = classify_persisted_documents(store)  # already classified → skipped
+    assert second["classified"] == 0 and second["skipped"] == 1
+    # empty store never raises
+    empty = ScorecardStore(db_path=os.path.join(tmp_path, "empty.db"))
+    assert classify_persisted_documents(empty) == {"classified": 0, "skipped": 0, "total": 0}

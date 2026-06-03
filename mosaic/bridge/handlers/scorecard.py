@@ -195,6 +195,55 @@ def scorecard_compare_macro_label_sources(params: dict[str, Any]) -> dict[str, A
 
 
 # ---------------------------------------------------------------------------
+# scorecard.classify_macro_documents / scorecard.macro_sentiment_index
+# (macro plan P4 — document event pipeline; evidence only, not a primary label)
+# ---------------------------------------------------------------------------
+
+
+@method("scorecard.classify_macro_documents")
+def scorecard_classify_macro_documents(params: dict[str, Any]) -> dict[str, Any]:
+    """Enrich persisted ``macro_documents`` with deterministic event tags +
+    sentiment in place (idempotent). Optional ``source`` / ``discovered_at_lte``
+    filters and ``only_unclassified`` (default True)."""
+    source: Optional[str] = params.get("source") or None
+    discovered_at_lte: Optional[str] = params.get("discovered_at_lte") or None
+    only_unclassified = params.get("only_unclassified", True)
+    for key, val in (("source", source), ("discovered_at_lte", discovered_at_lte)):
+        if val is not None and not isinstance(val, str):
+            raise RpcError(INVALID_PARAMS, f"'{key}' must be a string when provided")
+    try:
+        from mosaic.scorecard.macro_events import classify_persisted_documents
+
+        return classify_persisted_documents(
+            _store(),
+            source=source,
+            discovered_at_lte=discovered_at_lte,
+            only_unclassified=bool(only_unclassified),
+        )
+    except Exception as exc:
+        raise RpcError(INTERNAL_ERROR, f"{type(exc).__name__}: {exc}") from exc
+
+
+@method("scorecard.macro_sentiment_index")
+def scorecard_macro_sentiment_index(params: dict[str, Any]) -> dict[str, Any]:
+    """Point-in-time daily sentiment/event index for a macro agent (evidence).
+
+    Params: agent (str), as_of (str YYYY-MM-DD), lookback_days (int, default 7).
+    """
+    agent = _require_str(params, "agent")
+    as_of = _require_str(params, "as_of")
+    lookback = params.get("lookback_days", 7)
+    if not isinstance(lookback, int) or lookback <= 0:
+        raise RpcError(INVALID_PARAMS, "'lookback_days' must be a positive integer")
+    try:
+        from mosaic.scorecard.macro_events import build_sentiment_index
+
+        return build_sentiment_index(_store(), agent, as_of, lookback_days=lookback)
+    except Exception as exc:
+        raise RpcError(INTERNAL_ERROR, f"{type(exc).__name__}: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
 # scorecard.list_skill
 # ---------------------------------------------------------------------------
 
