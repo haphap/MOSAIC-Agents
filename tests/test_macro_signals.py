@@ -304,7 +304,7 @@ class TestMacroAgentSpecificLabels(unittest.TestCase):
         with _cal_patch(), \
              patch("mosaic.scorecard.scorer._fetch_close", fake_close), \
              patch("mosaic.scorecard.scorer._fetch_benchmark_series", fake_series):
-            MacroScorer(store, benchmark="000300.SH").score_pending("cohort_default", "2024-02-01")
+            MacroScorer(store, benchmark="000300.SH", full_label_sources_enabled=True).score_pending("cohort_default", "2024-02-01")
 
         with store._connect() as conn:
             row = conn.execute(
@@ -351,7 +351,7 @@ class TestMacroAgentSpecificLabels(unittest.TestCase):
         with _cal_patch(), \
              patch("mosaic.scorecard.scorer._fetch_close", fake_close), \
              patch("mosaic.scorecard.scorer._fetch_benchmark_series", lambda *a: [100.0]):
-            MacroScorer(store, benchmark="000300.SH").score_pending("cohort_default", "2024-02-01")
+            MacroScorer(store, benchmark="000300.SH", full_label_sources_enabled=True).score_pending("cohort_default", "2024-02-01")
 
         with store._connect() as conn:
             row = conn.execute(
@@ -383,7 +383,7 @@ class TestMacroAgentSpecificLabels(unittest.TestCase):
              patch("mosaic.scorecard.scorer._fetch_close", fake_close), \
              patch("mosaic.scorecard.scorer._fetch_benchmark_series", lambda *a: [100, 101, 102]), \
              patch("mosaic.scorecard.scorer._fetch_instrument_series", lambda *a: []):
-            MacroScorer(store, benchmark="000300.SH").score_pending("cohort_default", "2024-02-01")
+            MacroScorer(store, benchmark="000300.SH", full_label_sources_enabled=True).score_pending("cohort_default", "2024-02-01")
 
         with store._connect() as conn:
             row = conn.execute(
@@ -437,7 +437,7 @@ class TestMacroAgentSpecificLabels(unittest.TestCase):
         with _cal_patch(), \
              patch("mosaic.scorecard.scorer._fetch_close", fake_close), \
              patch("mosaic.scorecard.scorer._fetch_benchmark_series", lambda *a: [100, 101, 102]):
-            out = MacroScorer(store, benchmark="000300.SH").score_pending("cohort_default", "2024-02-01")
+            out = MacroScorer(store, benchmark="000300.SH", full_label_sources_enabled=True).score_pending("cohort_default", "2024-02-01")
 
         self.assertEqual(out["macro_scored"], 10)
         with store._connect() as conn:

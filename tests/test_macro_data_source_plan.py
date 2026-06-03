@@ -247,3 +247,104 @@ def test_relative_and_basket_path_helpers():
     assert relative == pytest.approx([1.0, 1.03])
     basket = compute_basket_path_label([[100.0, 110.0], [200.0, 190.0]])
     assert basket == pytest.approx([1.0, 1.025])
+
+
+# ---------------------------------------------------------------------------
+# P6: rollout gate (macro_full_label_sources_enabled) + integration
+# ---------------------------------------------------------------------------
+
+import datetime as _dt  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+from mosaic.bridge.handlers.autoresearch import _select_agent  # noqa: E402
+from mosaic.bridge.handlers.prompts import _LAYER_BY_AGENT  # noqa: E402
+from mosaic.default_config import DEFAULT_CONFIG  # noqa: E402
+from mosaic.scorecard.macro_labels import primary_label_for_agent  # noqa: E402
+from mosaic.scorecard.scorer import MacroScorer  # noqa: E402
+
+
+def _ntd(d: str, n: int) -> str:
+    return (_dt.date.fromisoformat(d) + _dt.timedelta(days=n)).isoformat()
+
+
+def _ptd(d: str, n: int) -> str:
+    return (_dt.date.fromisoformat(d) - _dt.timedelta(days=n)).isoformat()
+
+
+def _cal():
+    return patch.multiple(
+        "mosaic.dataflows.calendar", next_trading_day=_ntd, previous_trading_day=_ptd
+    )
+
+
+def _macro_state(outputs: dict, date: str = "2024-01-02") -> dict:
+    return {
+        "active_cohort": "cohort_default",
+        "as_of_date": date,
+        "layer1_outputs": outputs,
+        "layer1_consensus": {"stance": "BULLISH", "confidence": 0.6},
+    }
+
+
+def test_full_label_sources_gate_controls_primary_labels():
+    # Gate OFF: no agent's primary is a new proxy/path label; the two PR #73
+    # agents still keep a (benchmark-derived) primary.
+    for agent in MACRO_AGENTS:
+        off = primary_label_for_agent(agent, full_label_sources_enabled=False)
+        assert off is None or off.label_type not in PRIMARY_LABEL_CONFIGS
+        assert primary_label_for_agent(agent, full_label_sources_enabled=True) is not None
+    assert (
+        primary_label_for_agent("volatility", full_label_sources_enabled=False).label_type
+        == "max_drawdown_5d"
+    )
+
+
+def test_scorer_default_gate_off_keeps_proxy_agent_off_path_label(tmp_path):
+    # dollar's primary is a proxy path label → gated off by default → must NOT be
+    # recorded as cny_pressure_path_5d.
+    store = ScorecardStore(db_path=os.path.join(tmp_path, "t.db"))
+    d0 = "2024-01-02"
+    store.append_macro_signals_from_state(
+        _macro_state({"dollar": {"agent": "dollar", "dxy_trend": "WEAKENING", "confidence": 0.5}}, d0)
+    )
+    t5 = _ntd(d0, 5)
+    with _cal(), \
+         patch("mosaic.scorecard.scorer._fetch_close", lambda ts, date: {d0: 100.0, t5: 102.0}.get(date)), \
+         patch("mosaic.scorecard.scorer._fetch_benchmark_series", lambda *a: [100, 101, 102]), \
+         patch("mosaic.scorecard.scorer._fetch_instrument_series", lambda *a: [100, 101, 102]):
+        MacroScorer(store, benchmark="000300.SH").score_pending("cohort_default", "2024-02-01")  # default flag
+    with store._connect() as conn:
+        row = conn.execute("SELECT label_type FROM macro_signals").fetchone()
+    assert row["label_type"] != "cny_pressure_path_5d"  # rolled back to PR #73 behavior
+
+
+def test_p6_integration_ingest_score_skill_select(tmp_path):
+    store = ScorecardStore(db_path=os.path.join(tmp_path, "t.db"))
+    d0 = "2024-01-02"
+    outputs = {
+        "central_bank": {"agent": "central_bank", "stance": "TIGHTENING", "confidence": 0.7},
+        "china": {"agent": "china", "policy_direction": "PRO_GROWTH", "confidence": 0.6},
+        "geopolitical": {"agent": "geopolitical", "escalation_level": 5, "confidence": 0.6},
+        "dollar": {"agent": "dollar", "dxy_trend": "WEAKENING", "confidence": 0.5},
+        "yield_curve": {"agent": "yield_curve", "recession_signal": "GREEN", "confidence": 0.5},
+        "commodities": {"agent": "commodities", "china_demand_signal": "ACCELERATING", "confidence": 0.5},
+        "volatility": {"agent": "volatility", "regime_filter": "RISK_ON", "confidence": 0.7},
+        "emerging_markets": {"agent": "emerging_markets", "em_relative": "OUTPERFORMING", "confidence": 0.6},
+        "news_sentiment": {"agent": "news_sentiment", "retail_sentiment_score": 0.5, "confidence": 0.6},
+        "institutional_flow": {"agent": "institutional_flow", "sectors_in_out": [{"net_amount_cny": 1500}], "confidence": 0.6},
+    }
+    assert store.append_macro_signals_from_state(_macro_state(outputs, d0)) == 10
+    t5 = _ntd(d0, 5)
+    with _cal(), \
+         patch("mosaic.scorecard.scorer._fetch_close", lambda ts, date: {d0: 100.0, t5: 102.0}.get(date)), \
+         patch("mosaic.scorecard.scorer._fetch_benchmark_series", lambda *a: [100, 101, 102]), \
+         patch("mosaic.scorecard.scorer._fetch_instrument_series", lambda *a: [100, 101, 102]):
+        out = MacroScorer(store, benchmark="000300.SH", full_label_sources_enabled=True).score_pending(
+            "cohort_default", "2024-02-01"
+        )
+    assert out["macro_scored"] == 10
+    skill = {r["agent"]: r for r in store.list_macro_skill("cohort_default")}
+    assert len(skill) == 10
+    now = _dt.datetime(2024, 3, 1, tzinfo=_dt.timezone.utc)
+    chosen = _select_agent(store, "cohort_default", None, DEFAULT_CONFIG, now)
+    assert _LAYER_BY_AGENT[chosen] == "macro"  # selection picks a scored macro agent

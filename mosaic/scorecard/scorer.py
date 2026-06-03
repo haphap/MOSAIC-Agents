@@ -296,6 +296,22 @@ def _macro_agent_specific_labels_enabled() -> bool:
         return True
 
 
+def _macro_full_label_sources_enabled() -> bool:
+    """P6 rollout gate. When False (default), the new proxy/relative/basket path
+    labels are NOT used — scoring rolls back to the PR #73 set (benchmark-derived
+    labels), so unvalidated data sources stay out of primary scoring."""
+    try:
+        from mosaic.default_config import DEFAULT_CONFIG
+
+        return bool(
+            DEFAULT_CONFIG.get("autoresearch", {}).get(
+                "macro_full_label_sources_enabled", False
+            )
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _fetch_benchmark_series(ts_code: str, start_iso: str, end_iso: str) -> list[float]:
     """Benchmark index closes over [start, end] (chronological). [] on failure.
 
@@ -540,6 +556,7 @@ class MacroScorer:
         benchmark: Optional[str] = None,
         neutral_band: Optional[float] = None,
         agent_specific_labels_enabled: Optional[bool] = None,
+        full_label_sources_enabled: Optional[bool] = None,
     ) -> None:
         self.store = store
         self.benchmark = benchmark or _benchmark_ticker()
@@ -550,6 +567,13 @@ class MacroScorer:
             bool(agent_specific_labels_enabled)
             if agent_specific_labels_enabled is not None
             else _macro_agent_specific_labels_enabled()
+        )
+        # P6 rollout gate: when False, restrict primary labels to the validated
+        # PR #73 set (the new proxy/path labels stay out of primary scoring).
+        self.full_label_sources_enabled = (
+            bool(full_label_sources_enabled)
+            if full_label_sources_enabled is not None
+            else _macro_full_label_sources_enabled()
         )
         self._vol_cache: dict[str, float] = {}
 
@@ -617,7 +641,9 @@ class MacroScorer:
             return None
         from mosaic.scorecard.macro_labels import primary_label_for_agent
 
-        spec = primary_label_for_agent(row.agent)
+        spec = primary_label_for_agent(
+            row.agent, full_label_sources_enabled=self.full_label_sources_enabled
+        )
         if spec is None:
             return None
 
@@ -721,7 +747,9 @@ class MacroScorer:
                         primary_label_for_agent,
                     )
 
-                    spec = primary_label_for_agent(row.agent)
+                    spec = primary_label_for_agent(
+                        row.agent, full_label_sources_enabled=self.full_label_sources_enabled
+                    )
                     label_type = spec.label_type if spec is not None else BENCHMARK_FALLBACK_LABEL
                 self.store.update_macro_scoring(
                     row.id,

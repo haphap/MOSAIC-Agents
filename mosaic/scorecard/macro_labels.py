@@ -383,8 +383,21 @@ def list_macro_label_inventory() -> list[dict]:
     return [spec.as_dict() for spec in MACRO_LABEL_INVENTORY]
 
 
-def primary_label_for_agent(agent: str) -> Optional[MacroLabelSpec]:
+def primary_label_for_agent(
+    agent: str, full_label_sources_enabled: bool = True
+) -> Optional[MacroLabelSpec]:
+    """Best ready primary label for ``agent``.
+
+    P6 rollout gate: when ``full_label_sources_enabled`` is False, the new
+    proxy/relative/basket path labels (those backed by ``macro_path_labels``)
+    are excluded, so scoring rolls back to the validated PR #73 set
+    (benchmark-derived labels) — unvalidated data sources stay out of primary.
+    """
     specs = [s for s in MACRO_LABEL_INVENTORY if s.agent == agent and s.primary_ready]
+    if not full_label_sources_enabled:
+        from mosaic.scorecard.macro_path_labels import PRIMARY_LABEL_CONFIGS
+
+        specs = [s for s in specs if s.label_type not in PRIMARY_LABEL_CONFIGS]
     specs.sort(key=lambda s: (s.primary_order, s.label_type))
     return specs[0] if specs else None
 
