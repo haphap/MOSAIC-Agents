@@ -342,6 +342,38 @@ class TestDarwinianGetWeights:
         assert result["weights"]["ackman"]["weight"] == pytest.approx(1.5)
         assert result["weights"]["ackman"]["quartile"] == 1
 
+    def test_returns_unified_weight_metadata(self, tmp_store):
+        tmp_store.upsert_darwinian_weights(
+            [
+                {
+                    "cohort": "cohort_default",
+                    "agent": "volatility",
+                    "layer": "macro",
+                    "date": "2024-07-31",
+                    "weight": 1.05,
+                    "previous_weight": 1.0,
+                    "performance_metric": "raw_macro_score_5d",
+                    "performance_value": 0.02,
+                    "normalized_performance": 0.02,
+                    "rank_scope": "macro",
+                    "quartile": 1,
+                    "update_action": "up",
+                    "n_obs": 10,
+                    "source_table": "macro_signals",
+                    "source_date": "2024-07-24",
+                },
+            ]
+        )
+        result = dispatch(
+            "darwinian.get_weights",
+            {"cohort": "cohort_default", "date": "2024-07-31"},
+        )
+        row = result["weights"]["volatility"]
+        assert row["layer"] == "macro"
+        assert row["performance_metric"] == "raw_macro_score_5d"
+        assert row["rank_scope"] == "macro"
+        assert row["source_table"] == "macro_signals"
+
     def test_invalid_date_param(self, tmp_store):
         with pytest.raises(RpcError):
             dispatch(
