@@ -25,6 +25,30 @@ logger = logging.getLogger(__name__)
 _SCHEMA_VERSION = 2
 _DEFAULT_READ_TTL_SECONDS = 24 * 3600
 _DEFAULT_MAX_ENTRIES = 50_000
+_EMPTY_TEXT_MARKERS = (
+    "no data found",
+    "no data returned",
+    "no data available",
+    "no rows",
+    "no results",
+    "no news found",
+    "no relevant news found",
+    "data unavailable",
+    "not available",
+)
+_EMPTY_LINE_TERMS = (
+    "available",
+    "data",
+    "entries",
+    "found",
+    "news",
+    "observations",
+    "recorded",
+    "records",
+    "results",
+    "returned",
+    "rows",
+)
 
 
 @dataclass(frozen=True)
@@ -73,6 +97,95 @@ def _as_max_entries(value: Any) -> int | None:
     except (TypeError, ValueError):
         return _DEFAULT_MAX_ENTRIES
     return entries if entries > 0 else None
+
+
+def _is_empty_result(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return _is_empty_text_result(value)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return len(value) == 0
+    if isinstance(value, dict):
+        return len(value) == 0
+    empty_attr = getattr(value, "empty", None)
+    if isinstance(empty_attr, bool):
+        return empty_attr
+    return False
+
+
+def _is_empty_text_result(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return True
+    lowered = stripped.lower()
+    if lowered in {"[]", "{}", "null", "none"}:
+        return True
+
+    try:
+        decoded = json.loads(stripped)
+    except json.JSONDecodeError:
+        decoded = None
+    else:
+        return _is_empty_result(decoded)
+
+    non_comment_lines = [
+        line.strip()
+        for line in stripped.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if not non_comment_lines:
+        return True
+
+    meaningful_lines = [
+        line
+        for line in non_comment_lines
+        if not _is_empty_explanation_line(line) and not _is_non_data_disclaimer_line(line)
+    ]
+    if not meaningful_lines:
+        return True
+
+    if _looks_like_header_only_csv(stripped, meaningful_lines):
+        return True
+
+    return False
+
+
+def _is_empty_explanation_line(line: str) -> bool:
+    lowered = line.strip().lower().rstrip(".")
+    if any(marker in lowered for marker in _EMPTY_TEXT_MARKERS):
+        return True
+    return lowered.startswith("no ") and any(term in lowered for term in _EMPTY_LINE_TERMS)
+
+
+def _is_non_data_disclaimer_line(line: str) -> bool:
+    lowered = line.strip().lower()
+    return "数据说明" in lowered or "strictly only" in lowered
+
+
+def _looks_like_header_only_csv(text: str, meaningful_lines: list[str]) -> bool:
+    if len(meaningful_lines) != 1 or "," not in meaningful_lines[0]:
+        return False
+    if not any(line.strip().startswith("#") for line in text.splitlines()):
+        return False
+    fields = [field.strip().lower() for field in meaningful_lines[0].split(",")]
+    if len(fields) < 2:
+        return False
+    known_columns = {
+        "date",
+        "trade_date",
+        "value",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+        "symbol",
+        "ticker",
+        "ts_code",
+    }
+    return bool(set(fields) & known_columns)
 
 
 def _normalise(value: Any) -> Any:
@@ -148,10 +261,12 @@ class AgentDataCache:
         *,
         read_ttl_seconds: int | None = _DEFAULT_READ_TTL_SECONDS,
         max_entries: int | None = _DEFAULT_MAX_ENTRIES,
+        skip_empty_results: bool = True,
     ) -> None:
         self.db_path = Path(db_path).expanduser()
         self.read_ttl_seconds = read_ttl_seconds
         self.max_entries = max_entries
+        self.skip_empty_results = skip_empty_results
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "AgentDataCache | None":
@@ -163,7 +278,13 @@ class AgentDataCache:
             db_path = Path(config["data_cache_dir"]) / "agent_data" / "cache.sqlite3"
         ttl = _as_ttl_seconds(cache_cfg.get("read_ttl_seconds", _DEFAULT_READ_TTL_SECONDS))
         max_entries = _as_max_entries(cache_cfg.get("max_entries", _DEFAULT_MAX_ENTRIES))
-        return cls(db_path, read_ttl_seconds=ttl, max_entries=max_entries)
+        skip_empty_results = _as_bool(cache_cfg.get("skip_empty_results"), True)
+        return cls(
+            db_path,
+            read_ttl_seconds=ttl,
+            max_entries=max_entries,
+            skip_empty_results=skip_empty_results,
+        )
 
     def get(
         self,
@@ -223,6 +344,10 @@ class AgentDataCache:
         vendor: str | None,
         vendor_chain: list[str],
     ) -> bool:
+        if self.skip_empty_results and _is_empty_result(value):
+            logger.debug("agent data cache skipped empty result for %s", method)
+            return False
+
         encoded = _encode_result(value)
         if encoded is None:
             logger.debug("agent data cache skipped unsupported result for %s", method)

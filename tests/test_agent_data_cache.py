@@ -210,6 +210,92 @@ def test_max_entries_prunes_least_recently_used_entries(monkeypatch):
     assert _cache().stats()["entries"] == 2
 
 
+def test_empty_successful_results_are_not_cached(monkeypatch):
+    set_config(
+        {
+            "data_cache_dir": get_config()["data_cache_dir"],
+            "tool_vendors": {"get_news": "opencli"},
+            "agent_data_cache": {"enabled": True},
+        }
+    )
+    calls = []
+
+    def fake_news(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            return "No relevant news found via opencli-rs for TEST between 2024-01-01 and 2024-01-31."
+        return "## TEST News\n\n- A real story\n  Link: https://example.com/story"
+
+    monkeypatch.setitem(interface.VENDOR_METHODS, "get_news", {"opencli": fake_news})
+
+    first = interface.route_to_vendor("get_news", "TEST", "2024-01-01", "2024-01-31")
+    second = interface.route_to_vendor("get_news", "TEST", "2024-01-01", "2024-01-31")
+    third = interface.route_to_vendor("get_news", "TEST", "2024-01-01", "2024-01-31")
+
+    assert first.startswith("No relevant news found")
+    assert "A real story" in second
+    assert third == second
+    assert calls == [
+        ("TEST", "2024-01-01", "2024-01-31"),
+        ("TEST", "2024-01-01", "2024-01-31"),
+    ]
+    assert _cache().stats()["entries"] == 1
+
+
+def test_macro_no_rows_notes_are_not_cached(monkeypatch):
+    set_config(
+        {
+            "data_cache_dir": get_config()["data_cache_dir"],
+            "tool_vendors": {"get_pboc_ops": "tushare"},
+            "agent_data_cache": {"enabled": True},
+        }
+    )
+    calls = []
+
+    def fake_pboc(*args):
+        calls.append(args)
+        if len(calls) == 1:
+            return "# PBOC Open Market Operations\nNo PBOC operations recorded between 2024-01-01 and 2024-01-31.\n"
+        return "# PBOC Open Market Operations\ntrade_date,op_type,volume\n20240102,Reverse Repo,100\n"
+
+    monkeypatch.setitem(interface.VENDOR_METHODS, "get_pboc_ops", {"tushare": fake_pboc})
+
+    first = interface.route_to_vendor("get_pboc_ops", "2024-01-31", 30)
+    second = interface.route_to_vendor("get_pboc_ops", "2024-01-31", 30)
+    third = interface.route_to_vendor("get_pboc_ops", "2024-01-31", 30)
+
+    assert "No PBOC operations recorded" in first
+    assert "Reverse Repo" in second
+    assert third == second
+    assert calls == [
+        ("2024-01-31", 30),
+        ("2024-01-31", 30),
+    ]
+    assert _cache().stats()["entries"] == 1
+
+
+def test_skip_empty_results_can_be_disabled(monkeypatch):
+    set_config(
+        {
+            "data_cache_dir": get_config()["data_cache_dir"],
+            "tool_vendors": {"get_fred_series": "fred"},
+            "agent_data_cache": {"enabled": True, "skip_empty_results": False},
+        }
+    )
+    calls = []
+
+    def fake_fred(*args):
+        calls.append(args)
+        return []
+
+    monkeypatch.setitem(interface.VENDOR_METHODS, "get_fred_series", {"fred": fake_fred})
+
+    assert interface.route_to_vendor("get_fred_series", "EMPTY", "2024-01-01", "2024-01-31") == []
+    assert interface.route_to_vendor("get_fred_series", "EMPTY", "2024-01-01", "2024-01-31") == []
+    assert calls == [("EMPTY", "2024-01-01", "2024-01-31")]
+    assert _cache().stats()["entries"] == 1
+
+
 def test_agent_data_cache_can_be_disabled(monkeypatch):
     set_config(
         {
