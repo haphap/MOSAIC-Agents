@@ -14,6 +14,7 @@ Exposes the prompt-mutation lifecycle to the TS orchestrator:
 
 from __future__ import annotations
 
+import math
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -277,7 +278,16 @@ def _select_agent(
         return force_agent
 
     ar = (config or {}).get("autoresearch", {}) or {}
-    min_macro_interval_days = int(ar.get("min_macro_interval_days", 5))
+    macro_quota = float(ar.get("macro_quota", 0.2))
+    macro_enabled = macro_quota > 0
+    if not macro_enabled:
+        min_macro_interval_days = 10**9
+    else:
+        quota_interval_days = max(1, math.ceil(1.0 / min(macro_quota, 1.0)))
+        min_macro_interval_days = max(
+            int(ar.get("min_macro_interval_days", 5)),
+            quota_interval_days,
+        )
     recent_revert_penalty_days = int(ar.get("recent_revert_penalty_days", 14))
 
     all_agents = list(_LAYER_BY_AGENT.keys())
@@ -288,13 +298,17 @@ def _select_agent(
     revert_since = (now - timedelta(days=recent_revert_penalty_days)).isoformat()
     penalized = store.recently_reverted_agents(cohort, revert_since)
 
-    # macro layer ranked worst→best by mean_raw_macro_score_5d (no data = 0).
+    # macro layer ranked worst→best by mean_raw_macro_score_5d. Cold-start
+    # macro agents stay out of automatic selection until they have real score.
     macro_skill = {r["agent"]: r for r in store.list_macro_skill(cohort)}
+    scored_macro_agents = [
+        a
+        for a in macro_agents
+        if (macro_skill.get(a) or {}).get("mean_raw_macro_score_5d") is not None
+    ]
 
     def macro_key(a: str) -> float:
-        r = macro_skill.get(a)
-        v = r.get("mean_raw_macro_score_5d") if r else None
-        return float(v) if v is not None else 0.0
+        return float(macro_skill[a]["mean_raw_macro_score_5d"])
 
     # non-macro ranked worst→best by rolling Sharpe (existing metric).
     weights = store.get_darwinian_weights(cohort)
@@ -324,8 +338,8 @@ def _select_agent(
             last_dt = last_dt.replace(tzinfo=timezone.utc)
         macro_due = (now - last_dt) >= timedelta(days=min_macro_interval_days)
 
-    if macro_due and macro_agents:
-        chosen = _first_eligible(sorted(macro_agents, key=macro_key))
+    if macro_enabled and macro_due and scored_macro_agents:
+        chosen = _first_eligible(sorted(scored_macro_agents, key=macro_key))
         if chosen:
             return chosen
 

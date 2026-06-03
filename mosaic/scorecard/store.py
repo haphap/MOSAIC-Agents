@@ -409,7 +409,7 @@ MACRO_AGENTS: frozenset[str] = frozenset(
 
 
 _SHARPE_MIN_OBS = 5
-_SHARPE_ANNUALIZATION = 252 ** 0.5
+_SHARPE_ANNUALIZATION = (252.0 / 5.0) ** 0.5
 
 
 def _sharpe(values: list[float]) -> Optional[float]:

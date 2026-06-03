@@ -191,6 +191,37 @@ class TestMacroSkill(unittest.TestCase):
         self.assertEqual(rows[0]["hit_rate_5d"], 1.0)
         self.assertIsNone(rows[0]["sharpe_window"])  # n_obs < 5
 
+    def test_sharpe_window_uses_5d_horizon_annualization(self):
+        import tempfile
+        import os
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = ScorecardStore(db_path=os.path.join(tmp.name, "t.db"))
+        scores = [0.01, 0.02, -0.01, 0.03, 0.0]
+        for i, score in enumerate(scores, start=1):
+            date = f"2024-01-0{i}"
+            store.append_macro_signals_from_state(
+                _state(
+                    {"dollar": {"agent": "dollar", "dxy_trend": "WEAKENING", "confidence": 0.5}},
+                    date=date,
+                )
+            )
+            with store._connect() as conn:
+                rid = conn.execute(
+                    "SELECT id FROM macro_signals WHERE agent='dollar' AND date=?",
+                    (date,),
+                ).fetchone()[0]
+            store.update_macro_scoring(
+                rid,
+                {"hit_5d": 1, "raw_macro_score_5d": score, "scored_at": "2024-02-01"},
+            )
+
+        row = store.list_macro_skill("cohort_default")[0]
+        mean = sum(scores) / len(scores)
+        var = sum((x - mean) ** 2 for x in scores) / (len(scores) - 1)
+        expected = (mean / (var ** 0.5)) * ((252.0 / 5.0) ** 0.5)
+        self.assertAlmostEqual(row["sharpe_window"], expected)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

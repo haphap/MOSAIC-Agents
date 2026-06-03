@@ -258,6 +258,12 @@ export interface ScorecardScoreOutcome {
   skipped_immature: number;
   /** Rows where Tushare returned no close (suspension / missing data). */
   skipped_missing: number;
+  /** Macro signals that received benchmark-5d scoring. */
+  macro_scored: number;
+  /** Macro signals whose 5d horizon has not yet matured. */
+  macro_skipped_immature: number;
+  /** Macro signals where benchmark data was missing. */
+  macro_skipped_missing: number;
 }
 
 /** One row of ``scorecard.list_skill`` aggregate output. */
@@ -842,8 +848,12 @@ export class BridgeApi {
   }
 
   // scorecard.* (Phase 3D)
-  scorecardAppend(state: Record<string, unknown>): Promise<{ ingested: number }> {
-    return this.client.call<{ ingested: number }>("scorecard.append", { state });
+  scorecardAppend(
+    state: Record<string, unknown>,
+  ): Promise<{ ingested: number; macro_ingested: number }> {
+    return this.client.call<{ ingested: number; macro_ingested: number }>("scorecard.append", {
+      state,
+    });
   }
 
   scorecardScorePending(cohort: string, today: string): Promise<ScorecardScoreOutcome> {

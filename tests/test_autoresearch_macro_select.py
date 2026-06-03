@@ -69,6 +69,26 @@ class TestLayerAwareSelect(unittest.TestCase):
         chosen = _select_agent(store, _COHORT, None, DEFAULT_CONFIG, _NOW)
         self.assertNotEqual(_LAYER_BY_AGENT[chosen], "macro")
 
+    def test_no_macro_skill_falls_back_to_nonmacro(self):
+        store, d = _store()
+        self.addCleanup(d.cleanup)
+        chosen = _select_agent(store, _COHORT, None, DEFAULT_CONFIG, _NOW)
+        self.assertNotEqual(_LAYER_BY_AGENT[chosen], "macro")
+
+    def test_macro_quota_zero_disables_macro_auto_selection(self):
+        store, d = _store()
+        self.addCleanup(d.cleanup)
+        _add_scored_macro(store, "volatility", -0.05)
+        cfg = {
+            **DEFAULT_CONFIG,
+            "autoresearch": {
+                **DEFAULT_CONFIG["autoresearch"],
+                "macro_quota": 0,
+            },
+        }
+        chosen = _select_agent(store, _COHORT, None, cfg, _NOW)
+        self.assertNotEqual(_LAYER_BY_AGENT[chosen], "macro")
+
     def test_recent_revert_penalty_skips_agent(self):
         store, d = _store()
         self.addCleanup(d.cleanup)
