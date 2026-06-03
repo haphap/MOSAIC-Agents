@@ -1319,6 +1319,9 @@ P7 agent-specific labels:
   新增 macro label inventory。
   volatility / geopolitical 的 max_drawdown_5d 已使用 benchmark close series 作为 primary。
   其他 agent-specific labels 暂无已确认 source parser，明确走 benchmark_fallback_5d。
+  macro_agent_specific_labels_enabled 默认 true 是有意设置：这让已确认数据源的
+  volatility/geopolitical 立即进入更贴近职责的 drawdown-aware 评分；需要完全复现
+  MVP benchmark scoring 时可显式设为 false。
   institutional_flow / news_sentiment 的 deferred source 指向主力资金流 / 行业资金流或 sentiment series，
   不使用 northbound-flow fallback。
 

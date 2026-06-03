@@ -301,6 +301,43 @@ class TestMacroAgentSpecificLabels(unittest.TestCase):
         self.assertEqual(row["hit_5d"], 1)
         self.assertGreater(row["raw_macro_score_5d"], 0)
 
+    def test_max_drawdown_endpoint_only_series_is_marked_fallback(self):
+        import os
+        import tempfile
+
+        d0 = "2024-01-02"
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = ScorecardStore(db_path=os.path.join(tmp.name, "t.db"))
+        store.append_macro_signals_from_state(
+            _state(
+                {
+                    "volatility": {
+                        "agent": "volatility",
+                        "regime_filter": "RISK_OFF",
+                        "confidence": 0.8,
+                    }
+                },
+                date=d0,
+            )
+        )
+        t5 = _ntd(d0, 5)
+
+        def fake_close(ts, date):
+            return {d0: 100.0, t5: 98.0}.get(date)
+
+        with _cal_patch(), \
+             patch("mosaic.scorecard.scorer._fetch_close", fake_close), \
+             patch("mosaic.scorecard.scorer._fetch_benchmark_series", lambda *a: [100.0]):
+            MacroScorer(store, benchmark="000300.SH").score_pending("cohort_default", "2024-02-01")
+
+        with store._connect() as conn:
+            row = conn.execute(
+                "SELECT label_type, label_source_status FROM macro_signals"
+            ).fetchone()
+        self.assertEqual(row["label_type"], "max_drawdown_5d")
+        self.assertEqual(row["label_source_status"], "fallback")
+
     def test_unavailable_agent_label_records_benchmark_fallback(self):
         import os
         import tempfile

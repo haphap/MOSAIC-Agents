@@ -309,6 +309,48 @@ class TestDarwinianCompute:
         with pytest.raises(RpcError):
             dispatch("darwinian.compute", {"today": "2024-07-31"})
 
+    def test_uses_runtime_config_for_weight_rewrite(self, tmp_store):
+        from mosaic.dataflows.config import set_config
+
+        agents = [
+            "semiconductor", "energy", "biotech", "consumer",
+            "industrials", "financials", "ackman", "cio",
+        ]
+        for idx, agent in enumerate(agents):
+            with tmp_store._connect() as conn:
+                conn.execute(
+                    "INSERT INTO recommendations("
+                    "cohort, agent, ticker, date, action, alpha_5d, scored_at"
+                    ") VALUES (?, ?, ?, '2024-07-01', 'BUY', ?, '2024-07-08')",
+                    ("cohort_default", agent, f"{agent[:4].upper()}.SH", 0.1 - idx * 0.01),
+                )
+
+        set_config(
+            {
+                "darwinian": {
+                    "weight_rewrite_enabled": True,
+                    "min_scored_observations_per_agent": 1,
+                    "min_ranked_agents_per_scope": 8,
+                }
+            }
+        )
+        try:
+            result = dispatch(
+                "darwinian.compute",
+                {"cohort": "cohort_default", "today": "2024-07-31"},
+            )
+        finally:
+            set_config({})
+
+        assert result["written"] == 8
+        row = dispatch(
+            "darwinian.get_weights",
+            {"cohort": "cohort_default", "date": "2024-07-31"},
+        )["weights"]["semiconductor"]
+        assert row["update_action"] == "up"
+        assert row["performance_metric"] == "alpha_5d_mean_30d"
+        assert row["weight"] == pytest.approx(1.05)
+
 
 # ===========================================================================
 # darwinian.get_weights

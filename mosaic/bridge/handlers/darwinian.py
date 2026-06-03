@@ -25,9 +25,14 @@ def _store():
 
 
 def _config():
-    from mosaic.default_config import DEFAULT_CONFIG
+    try:
+        from mosaic.dataflows.config import get_config
 
-    return DEFAULT_CONFIG
+        return get_config()
+    except Exception:  # noqa: BLE001
+        from mosaic.default_config import DEFAULT_CONFIG
+
+        return DEFAULT_CONFIG
 
 
 def _require_str(params: dict, key: str) -> str:

@@ -451,10 +451,12 @@ class MacroScorer:
 
         if spec.label_type == "max_drawdown_5d":
             closes = _fetch_benchmark_series(self.benchmark, row.date, t_5d)
+            label_source_status = "primary"
             if len(closes) < 2:
                 # Exact endpoint closes are already known by the caller; they
                 # still give a conservative 2-point drawdown estimate.
                 closes = [1.0, 1.0 + bench_ret]
+                label_source_status = "fallback"
             mdd = _max_drawdown(closes)
             band = self.neutral_band
             if mdd < -band:
@@ -479,7 +481,7 @@ class MacroScorer:
             )
             return {
                 "label_type": spec.label_type,
-                "label_source_status": "primary",
+                "label_source_status": label_source_status,
                 "label_value_5d": mdd,
                 "benchmark_return_5d": bench_ret,
                 "realized_label": realized,
