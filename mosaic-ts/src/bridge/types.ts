@@ -113,6 +113,7 @@ export interface MosaicConfig {
   agent_data_cache?: {
     enabled?: boolean;
     db_path?: string | null;
+    read_ttl_seconds?: number | null;
   };
 
   // ----- MiroFish (Plan §11.8 / 7M) -----

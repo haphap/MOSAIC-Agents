@@ -22,6 +22,7 @@ from typing import Any, Iterator
 logger = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 1
+_DEFAULT_READ_TTL_SECONDS = 24 * 3600
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,21 @@ def _as_bool(value: Any, default: bool = True) -> bool:
     if isinstance(value, str):
         return value.strip().lower() not in {"", "0", "false", "no", "off"}
     return bool(value)
+
+
+def _as_ttl_seconds(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip().lower()
+        if stripped in {"", "none", "null", "off", "disabled"}:
+            return None
+        value = stripped
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_READ_TTL_SECONDS
+    return seconds if seconds >= 0 else None
 
 
 def _normalise(value: Any) -> Any:
@@ -95,8 +111,9 @@ def _decode_result(result_format: str, payload: str) -> Any:
 class AgentDataCache:
     """SQLite-backed exact-call cache for routed agent data."""
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, db_path: str | Path, *, read_ttl_seconds: int | None = _DEFAULT_READ_TTL_SECONDS) -> None:
         self.db_path = Path(db_path).expanduser()
+        self.read_ttl_seconds = read_ttl_seconds
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "AgentDataCache | None":
@@ -106,17 +123,24 @@ class AgentDataCache:
         db_path = cache_cfg.get("db_path")
         if not db_path:
             db_path = Path(config["data_cache_dir"]) / "agent_data" / "cache.sqlite3"
-        return cls(db_path)
+        ttl = _as_ttl_seconds(cache_cfg.get("read_ttl_seconds", _DEFAULT_READ_TTL_SECONDS))
+        return cls(db_path, read_ttl_seconds=ttl)
 
     def get(self, method: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> CacheLookup:
         key = cache_key(method, args, kwargs)
         now = _now_iso()
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT result_format, result_payload FROM agent_data_cache WHERE cache_key = ?",
+                """
+                SELECT result_format, result_payload, updated_at
+                  FROM agent_data_cache
+                 WHERE cache_key = ?
+                """,
                 (key,),
             ).fetchone()
             if row is None:
+                return CacheLookup(hit=False)
+            if self._is_stale(row["updated_at"], now):
                 return CacheLookup(hit=False)
             conn.execute(
                 """
@@ -128,6 +152,20 @@ class AgentDataCache:
                 (now, key),
             )
             return CacheLookup(hit=True, value=_decode_result(row["result_format"], row["result_payload"]))
+
+    def _is_stale(self, updated_at: str, now_iso: str) -> bool:
+        if self.read_ttl_seconds is None:
+            return False
+        try:
+            updated = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+            now = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return (now - updated).total_seconds() >= self.read_ttl_seconds
 
     def set(
         self,

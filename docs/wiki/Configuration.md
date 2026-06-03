@@ -15,7 +15,7 @@ Runtime config is a single object (`MosaicConfig` in `mosaic-ts/src/bridge/types
 | `autoresearch` | cooldown / lockout / keep-threshold / monthly cap / eval horizon + opt-in `git` push |
 | `mirofish` | `engine` / `scorer` / `inject_context` (all opt-in; defaults montecarlo / terminal / off) |
 | `data_vendors`, `tool_vendors` | per-category vendor selection |
-| `agent_data_cache` | permanent SQLite cache for routed agent tool data (`enabled` default true; `db_path` optional) |
+| `agent_data_cache` | permanent SQLite cache for routed agent tool data (`enabled` default true; `db_path` optional; `read_ttl_seconds` default 86400) |
 
 ## Persistence model
 
@@ -30,4 +30,4 @@ Each CLI command spawns its own sidecar, so only **`config.save`** changes reach
 
 ## Environment overrides
 
-Beyond the keys in [Getting Started](Getting-Started.md): `MOSAIC_PYTHON` (interpreter), `MOSAIC_DATA_DIR` / `MOSAIC_RESULTS_DIR` / `MOSAIC_CACHE_DIR` (artefact roots), `MOSAIC_AGENT_DATA_CACHE_ENABLED` / `MOSAIC_AGENT_DATA_CACHE_DB` (permanent routed tool cache), `MOSAIC_BENCHMARK_TICKER` (scorer benchmark), `QLIB_CN_DATA_PATH` / `QLIB_CN_ETF_PATH` (qlib datasets), `MOSAIC_QLIB_REPO` / `MOSAIC_QLIB_ETF_COLLECTOR` (collector discovery), `MOSAIC_MIROFISH_URL` (OASIS engine).
+Beyond the keys in [Getting Started](Getting-Started.md): `MOSAIC_PYTHON` (interpreter), `MOSAIC_DATA_DIR` / `MOSAIC_RESULTS_DIR` / `MOSAIC_CACHE_DIR` (artefact roots), `MOSAIC_AGENT_DATA_CACHE_ENABLED` / `MOSAIC_AGENT_DATA_CACHE_DB` / `MOSAIC_AGENT_DATA_CACHE_READ_TTL_SECONDS` (permanent routed tool cache), `MOSAIC_BENCHMARK_TICKER` (scorer benchmark), `QLIB_CN_DATA_PATH` / `QLIB_CN_ETF_PATH` (qlib datasets), `MOSAIC_QLIB_REPO` / `MOSAIC_QLIB_ETF_COLLECTOR` (collector discovery), `MOSAIC_MIROFISH_URL` (OASIS engine).

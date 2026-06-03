@@ -29,6 +29,19 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() not in {"", "0", "false", "no", "off"}
 
 
+def _env_int_or_none(name: str, default: int | None) -> int | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    stripped = raw.strip().lower()
+    if stripped in {"", "none", "null", "off", "disabled"}:
+        return None
+    try:
+        return int(stripped)
+    except ValueError:
+        return default
+
+
 DEFAULT_CONFIG = {
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
     "data_dir": os.getenv("MOSAIC_DATA_DIR", _DEFAULT_DATA_DIR),
@@ -147,6 +160,7 @@ DEFAULT_CONFIG = {
     "agent_data_cache": {
         "enabled": _env_bool("MOSAIC_AGENT_DATA_CACHE_ENABLED", True),
         "db_path": os.getenv("MOSAIC_AGENT_DATA_CACHE_DB"),
+        "read_ttl_seconds": _env_int_or_none("MOSAIC_AGENT_DATA_CACHE_READ_TTL_SECONDS", 24 * 3600),
     },
     # ============== Cohorts (Phase 5 PRISM, Plan §9) ==============
     "active_cohort": "euphoria_2021",

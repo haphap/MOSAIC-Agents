@@ -104,6 +104,35 @@ def test_backtest_clamped_arguments_define_cache_key(monkeypatch):
     assert calls == [("DGS10", "2024-06-01", "2024-06-15")]
 
 
+def test_stale_cache_entry_is_refetched(monkeypatch):
+    set_config(
+        {
+            "data_cache_dir": get_config()["data_cache_dir"],
+            "tool_vendors": {"get_fred_series": "fred"},
+            "agent_data_cache": {"enabled": True, "read_ttl_seconds": 1},
+        }
+    )
+    calls = []
+
+    def fake_fred(*args):
+        calls.append(args)
+        return f"payload-{len(calls)}"
+
+    monkeypatch.setitem(interface.VENDOR_METHODS, "get_fred_series", {"fred": fake_fred})
+
+    assert interface.route_to_vendor("get_fred_series", "DFF", "2024-01-01", "2024-01-31") == "payload-1"
+    with sqlite3.connect(_cache().db_path) as conn:
+        conn.execute(
+            "UPDATE agent_data_cache SET updated_at = '2000-01-01T00:00:00+00:00'"
+        )
+
+    assert interface.route_to_vendor("get_fred_series", "DFF", "2024-01-01", "2024-01-31") == "payload-2"
+    assert calls == [
+        ("DFF", "2024-01-01", "2024-01-31"),
+        ("DFF", "2024-01-01", "2024-01-31"),
+    ]
+
+
 def test_agent_data_cache_can_be_disabled(monkeypatch):
     set_config(
         {
