@@ -86,7 +86,7 @@ class TestIngestIdempotent(unittest.TestCase):
 
 
 class TestMacroScorer(unittest.TestCase):
-    def _run(self, vote_output, bench_ret, today="2024-02-01"):
+    def _run(self, vote_output, bench_ret, today="2024-02-01", neutral_band=None):
         import tempfile
         import os
         d0 = "2024-01-02"
@@ -107,7 +107,11 @@ class TestMacroScorer(unittest.TestCase):
         with _cal_patch(), \
              patch("mosaic.scorecard.scorer._fetch_close", fake_close), \
              patch("mosaic.scorecard.scorer._fetch_benchmark_series", fake_series):
-            out = MacroScorer(store, benchmark="000300.SH").score_pending("cohort_default", today)
+            out = MacroScorer(
+                store,
+                benchmark="000300.SH",
+                neutral_band=neutral_band,
+            ).score_pending("cohort_default", today)
         with store._connect() as conn:
             row = conn.execute(
                 "SELECT vote, realized_label, hit_5d, raw_macro_score_5d, label_source_status, scored_at "
@@ -148,6 +152,15 @@ class TestMacroScorer(unittest.TestCase):
             bench_ret=0.05,  # big move
         )
         self.assertLess(big["raw_macro_score_5d"], 0)
+
+    def test_neutral_band_override_controls_realized_label(self):
+        _, row = self._run(
+            {"volatility": {"agent": "volatility", "regime_filter": "RISK_ON", "confidence": 0.8}},
+            bench_ret=0.01,
+            neutral_band=0.02,
+        )
+        self.assertEqual(row["realized_label"], 0)
+        self.assertEqual(row["hit_5d"], 0)
 
     def test_missing_benchmark_marks_scored(self):
         import tempfile

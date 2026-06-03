@@ -45,6 +45,17 @@ def _store():
     return get_store()
 
 
+def _config() -> dict[str, Any]:
+    try:
+        from mosaic.dataflows.config import get_config
+
+        return get_config()
+    except Exception:
+        from mosaic.default_config import DEFAULT_CONFIG
+
+        return DEFAULT_CONFIG
+
+
 def _require_str(params: dict, key: str) -> str:
     val = params.get(key)
     if not isinstance(val, str) or not val.strip():
@@ -114,8 +125,14 @@ def scorecard_score_pending(params: dict[str, Any]) -> dict[str, Any]:
 
     try:
         store = _store()
+        ar_cfg = (_config().get("autoresearch", {}) or {})
         result = dict(Scorer(store).score_pending(cohort=cohort, today=today))
-        result.update(MacroScorer(store).score_pending(cohort=cohort, today=today))
+        result.update(
+            MacroScorer(
+                store,
+                neutral_band=ar_cfg.get("macro_neutral_band"),
+            ).score_pending(cohort=cohort, today=today)
+        )
         return result
     except RpcError:
         raise

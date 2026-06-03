@@ -324,10 +324,17 @@ class MacroScorer:
     labels are follow-ups (left NULL here).
     """
 
-    def __init__(self, store, benchmark: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        store,
+        benchmark: Optional[str] = None,
+        neutral_band: Optional[float] = None,
+    ) -> None:
         self.store = store
         self.benchmark = benchmark or _benchmark_ticker()
-        self.neutral_band = _macro_neutral_band()
+        self.neutral_band = (
+            float(neutral_band) if neutral_band is not None else _macro_neutral_band()
+        )
         self._vol_cache: dict[str, float] = {}
 
     def _vol_scale(self, d0_iso: str) -> float:
