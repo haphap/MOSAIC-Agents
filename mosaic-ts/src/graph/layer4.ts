@@ -1,17 +1,15 @@
 /**
  * Layer-4 LangGraph subgraph (Plan §11.2 sub-step 2D.3).
  *
- * Topology is a small DAG (NOT a simple parallel fan-out like Layer 1-3):
+ * Topology is a deterministic serial chain:
  *
- *   START ─┬→ cro ───────────────┐
- *          └→ alpha_discovery ───┴→ autonomous_execution → cio → END
+ *   START → cro → alpha_discovery → autonomous_execution → cio → END
  *
  * Dependency contract:
- *   * cro + alpha_discovery — both read L1+L2+L3, run in parallel.
- *   * autonomous_execution — waits for both cro + alpha (LangGraph
- *     superstep barrier handles this automatically when a node has
- *     multiple incoming edges).
- *   * cio — final aggregator, waits for autonomous_execution.
+ *   * cro reads L1+L2+L3 first and writes risk objections.
+ *   * alpha_discovery then reads the same upstream state plus CRO context.
+ *   * autonomous_execution waits for CRO + alpha state.
+ *   * cio is the final aggregator.
  *
  * Subgraph assumes Layer-1, Layer-2 and Layer-3 outputs are populated in
  * state. cio's output also writes ``state.portfolio_actions`` (top-level
@@ -55,13 +53,10 @@ export function buildLayer4Graph(deps: BuildLayer4GraphDeps) {
     .addNode("cio", buildCioNode(deps));
 
   chainEdges(graph, [
-    // START → cro, alpha_discovery (parallel)
+    // Serial L4: keep one LLM/tool stream active at a time.
     [START, "cro"],
-    [START, "alpha_discovery"],
-    // cro, alpha_discovery → autonomous_execution (synchronisation point)
-    ["cro", "autonomous_execution"],
+    ["cro", "alpha_discovery"],
     ["alpha_discovery", "autonomous_execution"],
-    // autonomous_execution → cio → END
     ["autonomous_execution", "cio"],
     ["cio", END],
   ]);

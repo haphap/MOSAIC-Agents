@@ -3,22 +3,14 @@
  *
  * Topology:
  *
- *   START ─┬→ central_bank ──┬→ aggregate_l1 → END
- *          ├→ china ─────────┤
- *          ├→ geopolitical ──┤
- *          ├→ dollar ────────┤
- *          ├→ yield_curve ───┤
- *          ├→ commodities ───┤
- *          ├→ volatility ────┤
- *          ├→ emerging_markets ┤
- *          ├→ news_sentiment ┤
- *          └→ institutional_flow ─┘
+ *   START → central_bank → china → geopolitical → dollar → yield_curve
+ *         → commodities → volatility → emerging_markets → news_sentiment
+ *         → institutional_flow → aggregate_l1 → END
  *
- * LangGraph fans out automatically when a node has multiple outgoing edges
- * with no conditional gate; the 10 macro nodes run concurrently and the
- * aggregator runs after all of them finish (LangGraph waits on the
- * superstep barrier). State writes converge through the dict-merge reducer
- * on ``layer1_outputs``.
+ * The 10 macro nodes run serially in a deterministic order. This keeps one
+ * LLM/tool call stream active at a time, avoiding provider rate-limit bursts
+ * and Python bridge queue timeouts. State writes still converge through the
+ * dict-merge reducer on ``layer1_outputs``.
  *
  * 2D will replace the ``aggregate_l1 → END`` edge with ``aggregate_l1 →
  * layer2_subgraph_entry`` so the daily cycle continues into Layer 2.
@@ -89,12 +81,20 @@ export function buildLayer1Graph(deps: BuildLayer1GraphDeps) {
     .addNode("institutional_flow", buildInstitutionalFlowNode(deps))
     .addNode(LAYER1_AGGREGATOR_NODE, buildAggregateLayer1Node(deps));
 
-  // Fan-out START → each macro node; fan-in each → aggregator; aggregator → END
-  // (replaced in 2D when Layer 2 lands). Edges added by side effect via
-  // chainEdges so the builder keeps its typed node-name union (no `any`).
+  // Serial START → macro nodes → aggregator → END. Edges added by side effect
+  // via chainEdges so the builder keeps its typed node-name union (no `any`).
   chainEdges(graph, [
-    ...LAYER1_AGENT_NODES.map((name) => [START, name] as const),
-    ...LAYER1_AGENT_NODES.map((name) => [name, LAYER1_AGGREGATOR_NODE] as const),
+    [START, "central_bank"] as const,
+    ["central_bank", "china"] as const,
+    ["china", "geopolitical"] as const,
+    ["geopolitical", "dollar"] as const,
+    ["dollar", "yield_curve"] as const,
+    ["yield_curve", "commodities"] as const,
+    ["commodities", "volatility"] as const,
+    ["volatility", "emerging_markets"] as const,
+    ["emerging_markets", "news_sentiment"] as const,
+    ["news_sentiment", "institutional_flow"] as const,
+    ["institutional_flow", LAYER1_AGGREGATOR_NODE] as const,
     [LAYER1_AGGREGATOR_NODE, END] as const,
   ]);
 

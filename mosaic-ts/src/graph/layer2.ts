@@ -1,9 +1,10 @@
 /**
  * Layer-2 LangGraph subgraph (Plan §11.2 sub-step 2D.1).
  *
- * Topology mirrors Layer-1 fan-out / fan-in:
+ * Topology mirrors Layer-1's deterministic serial execution:
  *
- *   START → 7 sector nodes (parallel) → END
+ *   START → semiconductor → energy → biotech → consumer → industrials
+ *         → financials → relationship_mapper → END
  *
  * The subgraph assumes Layer-1 has already populated ``layer1_consensus``
  * and ``layer1_outputs.{china, institutional_flow}``. ``buildLayer1To2Graph``
@@ -64,8 +65,14 @@ export function buildLayer2Graph(deps: BuildLayer2GraphDeps) {
     .addNode("relationship_mapper", buildRelationshipMapperNode(deps));
 
   chainEdges(graph, [
-    ...LAYER2_AGENT_NODES.map((name) => [START, name] as const),
-    ...LAYER2_AGENT_NODES.map((name) => [name, END] as const),
+    [START, "semiconductor"] as const,
+    ["semiconductor", "energy"] as const,
+    ["energy", "biotech"] as const,
+    ["biotech", "consumer"] as const,
+    ["consumer", "industrials"] as const,
+    ["industrials", "financials"] as const,
+    ["financials", "relationship_mapper"] as const,
+    ["relationship_mapper", END] as const,
   ]);
 
   return graph.compile();
