@@ -20,11 +20,17 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { AIMessage } from "@langchain/core/messages";
 import type { Command } from "commander";
 import pc from "picocolors";
+import {
+  formatDurationMs,
+  parseAgentTimeoutSeconds,
+  resolveAgentTimeoutMs,
+} from "../../agents/helpers/runtime.js";
 import type { DailyCycleStateType } from "../../agents/state.js";
 import type { PortfolioAction } from "../../agents/types.js";
 import { BridgeApi, BridgeClient, RpcError } from "../../bridge/index.js";
 import { buildDailyCycleGraph } from "../../graph/daily_cycle.js";
 import { createLlmFromConfig, type LlmHandle } from "../../llm/factory.js";
+import { redactSensitiveText } from "../../security/redaction.js";
 import { pad } from "../_format.js";
 
 interface DailyCycleOptions {
@@ -36,6 +42,7 @@ interface DailyCycleOptions {
   baseUrl?: string;
   out?: string;
   vetoThreshold?: string;
+  agentTimeoutSeconds?: string;
 }
 
 export function registerDailyCycle(program: Command): void {
@@ -55,6 +62,10 @@ export function registerDailyCycle(program: Command): void {
     .option(
       "--veto-threshold <num>",
       "CRO veto threshold; rejection rate > this triggers replay (default 0.5)",
+    )
+    .option(
+      "--agent-timeout-seconds <seconds>",
+      "Per-agent wall-clock timeout in seconds (default 300; 0/off disables)",
     )
     .action(async (opts: DailyCycleOptions) => {
       const client = new BridgeClient();
@@ -83,12 +94,19 @@ export function registerDailyCycle(program: Command): void {
         const cohort = opts.cohort ?? config.active_cohort ?? "cohort_default";
         const asOfDate = opts.date ?? new Date().toISOString().slice(0, 10);
         const vetoThreshold = opts.vetoThreshold ? Number(opts.vetoThreshold) : 0.5;
+        const agentTimeoutSeconds = parseAgentTimeoutSeconds(opts.agentTimeoutSeconds);
+        const agentTimeoutMs = resolveAgentTimeoutMs(agentTimeoutSeconds);
+        const onAgentLog = (msg: string) => {
+          console.log(pc.dim(`  ${redactSensitiveText(msg)}`));
+        };
 
         const graph = buildDailyCycleGraph({
           llmHandle,
           api,
           config,
           vetoThreshold,
+          onLog: onAgentLog,
+          ...(agentTimeoutSeconds !== undefined ? { agentTimeoutSeconds } : {}),
         });
 
         const initialState: DailyCycleStateType = {
@@ -117,6 +135,9 @@ export function registerDailyCycle(program: Command): void {
         };
 
         console.log(pc.bold(`\nMOSAIC daily cycle — cohort=${cohort} date=${asOfDate}`));
+        console.log(
+          pc.dim(`agent_timeout=${agentTimeoutMs > 0 ? formatDurationMs(agentTimeoutMs) : "off"}`),
+        );
         const t0 = Date.now();
         const final = (await graph.invoke(initialState)) as DailyCycleStateType;
         const elapsed = ((Date.now() - t0) / 1000).toFixed(1);

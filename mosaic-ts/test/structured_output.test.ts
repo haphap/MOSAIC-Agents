@@ -164,16 +164,19 @@ describe("invokeStructuredOrFreetext", () => {
       supportsStructured: false,
       responses: [new AIMessage("PBOC stance: NEUTRAL.")],
     });
+    const logs: string[] = [];
     const result = await invokeStructuredOrFreetext({
       llm: llm as unknown as Parameters<typeof invokeStructuredOrFreetext>[0]["llm"],
       schema: Schema,
       messages: baseMessages,
       render: () => "UNREACHABLE",
       agentName: "central_bank",
+      onLog: (msg) => logs.push(msg),
     });
     expect(result.structured).toBeNull();
     expect(result.rendered).toBe("PBOC stance: NEUTRAL.");
     expect(llm.invokeCalls.length).toBe(1);
+    expect(logs[0]).toContain("provider does not support withStructuredOutput");
   });
 
   it("parses JSON fallback when structured output is unsupported", async () => {
