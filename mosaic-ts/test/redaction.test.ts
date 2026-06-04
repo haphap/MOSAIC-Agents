@@ -36,6 +36,23 @@ describe("redactSensitiveText", () => {
     );
   });
 
+  it("redacts URL query secrets from provider/tool errors", () => {
+    const text =
+      "400 Client Error: https://api.example.test/fred?series_id=X&api_key=abc123&file_type=json";
+
+    expect(redactSensitiveText(text)).toBe(
+      "400 Client Error: https://api.example.test/fred?series_id=X&api_key=<redacted-secret>&file_type=json",
+    );
+  });
+
+  it("redacts serialized secret fields and auth headers", () => {
+    const text = `headers: Authorization: Bearer sk-secret, body={"token":"tp-secret","key":"plain"}`;
+
+    expect(redactSensitiveText(text)).toBe(
+      `headers: Authorization: <redacted-secret>, body={"token":"<redacted-secret>","key":"<redacted-secret>"}`,
+    );
+  });
+
   it("redacts prompt bodies before structured payloads are stringified", () => {
     const payload = redactSensitiveValue({
       agent: "volatility",
