@@ -11,6 +11,9 @@ pytest.importorskip("qlib")
 pytest.importorskip("loguru")
 
 import mosaic.dataflows.collectors.data_collector.tushare.collector as collector_module  # noqa: E402
+from mosaic.dataflows.collectors.data_collector.tushare_etf.collector import (  # noqa: E402
+    TushareBatchCollector as EtfBatchCollector,
+)
 from mosaic.dataflows.collectors.data_collector.tushare.collector import (  # noqa: E402
     TushareBatchCollector,
     is_queryable_incremental_symbol,
@@ -38,6 +41,22 @@ def test_qlib_symbol_to_tushare_code_roundtrip():
     assert qlib_symbol_to_ts_code("SH600519") == "600519.SH"
     assert qlib_symbol_to_ts_code("BJ920001") == "920001.BJ"
     assert ts_code_to_qlib_symbol("920001.BJ") == "bj920001"
+
+
+def test_parallel_chunk_timeout_is_bounded_and_configurable(monkeypatch):
+    dates = [pd.Timestamp("2026-01-01"), pd.Timestamp("2026-01-02")]
+
+    stock_collector = TushareBatchCollector.__new__(TushareBatchCollector)
+    stock_collector.timeout = 300
+    assert stock_collector._parallel_chunk_timeout_seconds(dates, safe_calls_per_worker=100) >= 300
+
+    etf_collector = EtfBatchCollector.__new__(EtfBatchCollector)
+    etf_collector.timeout = 300
+    assert etf_collector._parallel_chunk_timeout_seconds(dates, safe_calls_per_worker=100) >= 300
+
+    monkeypatch.setenv("MOSAIC_TUSHARE_PARALLEL_CHUNK_TIMEOUT_SECONDS", "42")
+    assert stock_collector._parallel_chunk_timeout_seconds(dates, safe_calls_per_worker=100) == 42
+    assert etf_collector._parallel_chunk_timeout_seconds(dates, safe_calls_per_worker=100) == 42
 
 
 def test_fetch_new_stock_history_batches_multiple_ts_codes(monkeypatch, tmp_path):

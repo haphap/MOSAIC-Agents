@@ -9,7 +9,7 @@ import json
 import time
 
 import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, TimeoutError
 
 import numpy as np
 import pandas as pd
@@ -375,6 +375,21 @@ def _process_date_chunk(args) -> Set[str]:
             logger.warning(f"Parallel fetch failed for {trade_date}: {e}")
 
     return local_processed
+
+
+def _terminate_process_pool(executor: ProcessPoolExecutor) -> None:
+    processes = getattr(executor, "_processes", None) or {}
+    for process in list(processes.values()):
+        try:
+            if process.is_alive():
+                process.terminate()
+        except Exception:
+            continue
+    for process in list(processes.values()):
+        try:
+            process.join(timeout=5)
+        except Exception:
+            continue
 
 
 def dump_eod_to_qlib(
@@ -1689,6 +1704,20 @@ class TushareBatchCollector:
             total += _estimate_business_rows(effective_start, api_end)
         return total
 
+    def _parallel_chunk_timeout_seconds(self, chunk: List[pd.Timestamp], safe_calls_per_worker: int) -> int:
+        override = os.environ.get("MOSAIC_TUSHARE_PARALLEL_CHUNK_TIMEOUT_SECONDS")
+        if override:
+            try:
+                value = int(override)
+                if value > 0:
+                    return value
+            except ValueError:
+                logger.warning(f"Ignoring invalid MOSAIC_TUSHARE_PARALLEL_CHUNK_TIMEOUT_SECONDS={override!r}")
+
+        rate_limit_floor = len(chunk) * self.API_CALLS_PER_DATE * 60 / max(1, safe_calls_per_worker)
+        per_date_budget = min(10, max(5, int(self.timeout / 30) if self.timeout else 5))
+        return int(max(300, rate_limit_floor + len(chunk) * per_date_budget + 120))
+
     def fetch_dates_parallel(
         self,
         dates_to_fetch: List[pd.Timestamp],
@@ -1709,7 +1738,10 @@ class TushareBatchCollector:
 
         all_processed = processed_dates.copy()
         safe_calls_per_worker = max(1, self.SAFE_CALLS_PER_MINUTE // max_workers)
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        executor = ProcessPoolExecutor(max_workers=max_workers)
+        timed_out = False
+        futures = []
+        try:
             futures = [
                 executor.submit(
                     _process_date_chunk,
@@ -1724,12 +1756,28 @@ class TushareBatchCollector:
                 )
                 for chunk in chunks
             ]
-            for future in futures:
+            for future, chunk in zip(futures, chunks):
                 try:
-                    result = future.result()
+                    chunk_timeout = self._parallel_chunk_timeout_seconds(chunk, safe_calls_per_worker)
+                    result = future.result(timeout=chunk_timeout)
                     all_processed.update(result)
+                except TimeoutError:
+                    timed_out = True
+                    logger.error(
+                        f"Chunk processing timed out after {chunk_timeout}s "
+                        f"for {len(chunk)} dates; aborting parallel ingest"
+                    )
+                    for pending in futures:
+                        pending.cancel()
+                    _terminate_process_pool(executor)
+                    break
                 except Exception as e:
                     logger.error(f"Chunk processing failed: {e}")
+        finally:
+            executor.shutdown(wait=not timed_out, cancel_futures=True)
+
+        if timed_out:
+            raise RuntimeError("parallel Tushare date fetch timed out")
 
         return all_processed
 
