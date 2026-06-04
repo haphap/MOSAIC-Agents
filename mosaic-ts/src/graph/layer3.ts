@@ -17,7 +17,7 @@ import { buildBakerNode } from "../agents/superinvestor/baker.js";
 import { buildDruckenmillerNode } from "../agents/superinvestor/druckenmiller.js";
 import type { BridgeApi, MosaicConfig } from "../bridge/index.js";
 import type { LlmHandle } from "../llm/factory.js";
-import { chainEdges } from "./_edges.js";
+import { chainEdges, serialEdges } from "./_edges.js";
 
 export interface BuildLayer3GraphDeps {
   llmHandle: LlmHandle;
@@ -38,12 +38,6 @@ export function buildLayer3Graph(deps: BuildLayer3GraphDeps) {
     .addNode("baker", buildBakerNode(deps))
     .addNode("ackman", buildAckmanNode(deps));
 
-  chainEdges(graph, [
-    [START, "druckenmiller"] as const,
-    ["druckenmiller", "aschenbrenner"] as const,
-    ["aschenbrenner", "baker"] as const,
-    ["baker", "ackman"] as const,
-    ["ackman", END] as const,
-  ]);
+  chainEdges(graph, serialEdges([START, ...LAYER3_AGENT_NODES, END] as const));
   return graph.compile();
 }

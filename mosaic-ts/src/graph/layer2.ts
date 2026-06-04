@@ -31,7 +31,7 @@ import { buildSemiconductorNode } from "../agents/sector/semiconductor.js";
 import { DailyCycleState } from "../agents/state.js";
 import type { BridgeApi, MosaicConfig } from "../bridge/index.js";
 import type { LlmHandle } from "../llm/factory.js";
-import { chainEdges } from "./_edges.js";
+import { chainEdges, serialEdges } from "./_edges.js";
 
 export interface BuildLayer2GraphDeps {
   llmHandle: LlmHandle;
@@ -64,16 +64,7 @@ export function buildLayer2Graph(deps: BuildLayer2GraphDeps) {
     .addNode("financials", buildFinancialsNode(deps))
     .addNode("relationship_mapper", buildRelationshipMapperNode(deps));
 
-  chainEdges(graph, [
-    [START, "semiconductor"] as const,
-    ["semiconductor", "energy"] as const,
-    ["energy", "biotech"] as const,
-    ["biotech", "consumer"] as const,
-    ["consumer", "industrials"] as const,
-    ["industrials", "financials"] as const,
-    ["financials", "relationship_mapper"] as const,
-    ["relationship_mapper", END] as const,
-  ]);
+  chainEdges(graph, serialEdges([START, ...LAYER2_AGENT_NODES, END] as const));
 
   return graph.compile();
 }

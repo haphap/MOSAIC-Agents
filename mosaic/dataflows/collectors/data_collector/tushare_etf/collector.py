@@ -34,7 +34,7 @@ from data_collector.utils import get_calendar_list  # noqa: E402
 
 DEFAULT_BASE_DIR = CUR_DIR  # align with yahoo collector default_base_dir
 DEFAULT_QLIB_DIR = Path.home() / ".qlib" / "qlib_data"
-DEFAULT_ETF_ANALYSIS_START_DATE = os.environ.get("MOSAIC_ETF_ANALYSIS_START_DATE", "2005-02-23")
+DEFAULT_ETF_ANALYSIS_START_DATE = "2005-02-23"
 FEATURE_SPAN_FIELDS = ("close", "open", "high", "low", "factor", "volume")
 
 
@@ -43,6 +43,11 @@ def _get_token() -> str:
     if not token:
         raise RuntimeError("TUSHARE_TOKEN is required; set it as an environment variable.")
     return token.strip()
+
+
+def _default_etf_analysis_start_date() -> str:
+    configured = os.environ.get("MOSAIC_ETF_ANALYSIS_START_DATE", DEFAULT_ETF_ANALYSIS_START_DATE)
+    return configured.strip() or DEFAULT_ETF_ANALYSIS_START_DATE
 
 
 def ts_code_to_qlib_symbol(ts_code: str) -> str:
@@ -948,7 +953,7 @@ class TushareBatchCollector:
         (self.temp_dir / "daily").mkdir(parents=True, exist_ok=True)
 
         # 日期范围
-        self.start_datetime = pd.Timestamp(start) if start else pd.Timestamp(DEFAULT_ETF_ANALYSIS_START_DATE)
+        self.start_datetime = pd.Timestamp(start) if start else pd.Timestamp(_default_etf_analysis_start_date())
         self.end_datetime = pd.Timestamp(end) if end else pd.Timestamp.now()
         self._start_specified = start is not None  # 标记是否明确指定了 start 参数
 

@@ -31,7 +31,7 @@ import { buildYieldCurveNode } from "../agents/macro/yield_curve.js";
 import { DailyCycleState } from "../agents/state.js";
 import type { BridgeApi, MosaicConfig } from "../bridge/index.js";
 import type { LlmHandle } from "../llm/factory.js";
-import { chainEdges } from "./_edges.js";
+import { chainEdges, serialEdges } from "./_edges.js";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -81,22 +81,9 @@ export function buildLayer1Graph(deps: BuildLayer1GraphDeps) {
     .addNode("institutional_flow", buildInstitutionalFlowNode(deps))
     .addNode(LAYER1_AGGREGATOR_NODE, buildAggregateLayer1Node(deps));
 
-  // Serial START → macro nodes → aggregator → END. Edges added by side effect
-  // via chainEdges so the builder keeps its typed node-name union (no `any`).
-  chainEdges(graph, [
-    [START, "central_bank"] as const,
-    ["central_bank", "china"] as const,
-    ["china", "geopolitical"] as const,
-    ["geopolitical", "dollar"] as const,
-    ["dollar", "yield_curve"] as const,
-    ["yield_curve", "commodities"] as const,
-    ["commodities", "volatility"] as const,
-    ["volatility", "emerging_markets"] as const,
-    ["emerging_markets", "news_sentiment"] as const,
-    ["news_sentiment", "institutional_flow"] as const,
-    ["institutional_flow", LAYER1_AGGREGATOR_NODE] as const,
-    [LAYER1_AGGREGATOR_NODE, END] as const,
-  ]);
+  // Serial START → macro nodes → aggregator → END. The edge chain is derived
+  // from LAYER1_AGENT_NODES so exported graph order and execution order stay aligned.
+  chainEdges(graph, serialEdges([START, ...LAYER1_AGENT_NODES, LAYER1_AGGREGATOR_NODE, END] as const));
 
   return graph.compile();
 }

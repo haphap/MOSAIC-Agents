@@ -24,7 +24,7 @@ import { buildCroNode } from "../agents/decision/cro.js";
 import { DailyCycleState } from "../agents/state.js";
 import type { BridgeApi, MosaicConfig } from "../bridge/index.js";
 import type { LlmHandle } from "../llm/factory.js";
-import { chainEdges } from "./_edges.js";
+import { chainEdges, serialEdges } from "./_edges.js";
 
 export interface BuildLayer4GraphDeps {
   llmHandle: LlmHandle;
@@ -44,6 +44,12 @@ export const LAYER4_AGENT_NODES = [
   "cio",
 ] as const;
 
+export const LAYER4_REPLAY_AGENT_NODES = [
+  "alpha_discovery",
+  "autonomous_execution",
+  "cio",
+] as const;
+
 /** Build (and compile) the Layer-4 decision subgraph. */
 export function buildLayer4Graph(deps: BuildLayer4GraphDeps) {
   const graph = new StateGraph(DailyCycleState)
@@ -52,14 +58,8 @@ export function buildLayer4Graph(deps: BuildLayer4GraphDeps) {
     .addNode("autonomous_execution", buildAutonomousExecutionNode(deps))
     .addNode("cio", buildCioNode(deps));
 
-  chainEdges(graph, [
-    // Serial L4: keep one LLM/tool stream active at a time.
-    [START, "cro"],
-    ["cro", "alpha_discovery"],
-    ["alpha_discovery", "autonomous_execution"],
-    ["autonomous_execution", "cio"],
-    ["cio", END],
-  ]);
+  // Serial L4: keep one LLM/tool stream active at a time.
+  chainEdges(graph, serialEdges([START, ...LAYER4_AGENT_NODES, END] as const));
 
   return graph.compile();
 }
@@ -92,12 +92,7 @@ export function buildLayer4ReplayGraph(deps: BuildLayer4GraphDeps) {
     .addNode("autonomous_execution", buildAutonomousExecutionNode(deps))
     .addNode("cio", buildCioNode(deps));
 
-  chainEdges(graph, [
-    [START, "alpha_discovery"],
-    ["alpha_discovery", "autonomous_execution"],
-    ["autonomous_execution", "cio"],
-    ["cio", END],
-  ]);
+  chainEdges(graph, serialEdges([START, ...LAYER4_REPLAY_AGENT_NODES, END] as const));
 
   return graph.compile();
 }
