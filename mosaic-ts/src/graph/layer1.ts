@@ -83,7 +83,10 @@ export function buildLayer1Graph(deps: BuildLayer1GraphDeps) {
 
   // Serial START → macro nodes → aggregator → END. The edge chain is derived
   // from LAYER1_AGENT_NODES so exported graph order and execution order stay aligned.
-  chainEdges(graph, serialEdges([START, ...LAYER1_AGENT_NODES, LAYER1_AGGREGATOR_NODE, END] as const));
+  chainEdges(
+    graph,
+    serialEdges([START, ...LAYER1_AGENT_NODES, LAYER1_AGGREGATOR_NODE, END] as const),
+  );
 
   return graph.compile();
 }

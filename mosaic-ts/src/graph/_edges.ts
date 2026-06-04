@@ -56,8 +56,10 @@ export function serialEdges<const Nodes extends readonly [string, string, ...str
   nodes: Nodes,
 ): SerialEdgePairs<Nodes> {
   const edges: Array<readonly [string, string]> = [];
-  for (let i = 0; i < nodes.length - 1; i += 1) {
-    edges.push([nodes[i]!, nodes[i + 1]!]);
+  let previous = nodes[0];
+  for (const next of nodes.slice(1)) {
+    edges.push([previous, next]);
+    previous = next;
   }
   return edges as unknown as SerialEdgePairs<Nodes>;
 }
