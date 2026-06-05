@@ -102,30 +102,21 @@ class TestMarkdownCsv:
 # --------------------------------------------------------------------- 1. PBOC ops
 
 
-def test_get_pboc_ops_uses_window(mock_query_pro):
-    canned = _df_with_rows(
-        [
-            {"trade_date": "20240624", "op_type": "Reverse Repo", "volume": 200, "rate": 1.8, "term": 7},
-            {"trade_date": "20240625", "op_type": "MLF", "volume": 100, "rate": 2.5, "term": 365},
-        ]
-    )
-    m = mock_query_pro(canned)
+def test_get_pboc_ops_delegates_to_pboc_website_mirror(monkeypatch):
+    from mosaic.dataflows import pboc_ops  # noqa: PLC0415
+
+    calls = []
+
+    def fake_pboc(curr_date, look_back_days):
+        calls.append((curr_date, look_back_days))
+        return "# PBOC Open Market Announcements\npub_date,title\n2024-06-30,x\n"
+
+    monkeypatch.setattr(pboc_ops, "get_pboc_ops", fake_pboc)
 
     out = macro_data.get_pboc_ops("2024-06-30", look_back_days=7)
 
-    assert m.call_count == 1
-    kwargs = m.call_args.kwargs
-    assert kwargs["start_date"] == "20240623"
-    assert kwargs["end_date"] == "20240630"
-    assert "PBOC Open Market Operations" in out
-    assert "Reverse Repo" in out
-    assert "MLF" in out
-
-
-def test_get_pboc_ops_empty_frame(mock_query_pro):
-    mock_query_pro(pd.DataFrame())
-    out = macro_data.get_pboc_ops("2024-06-30", look_back_days=2)
-    assert "No PBOC operations recorded" in out
+    assert calls == [("2024-06-30", 7)]
+    assert "PBOC Open Market Announcements" in out
 
 
 # --------------------------------------------------------------------- 2. North-flow

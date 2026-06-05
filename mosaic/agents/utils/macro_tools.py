@@ -5,7 +5,7 @@ which:
 
 1. Applies any active backtest date-bounds context (clamping ``end_date`` /
    ``curr_date`` to ``as_of_date``).
-2. Dispatches to the appropriate vendor implementation (Tushare / AkShare /
+2. Dispatches to the appropriate vendor implementation (PBOC / Tushare / AkShare /
    FRED) per the active config (``data_vendors`` / ``tool_vendors``).
 3. Walks the fallback chain on :class:`DataVendorUnavailable`.
 
@@ -21,7 +21,7 @@ Tool                            Used by                                         
 ``get_fred_series``             central_bank, dollar, yield_curve, commodities,   FRED
                                 volatility (FEDFUNDS, DGS10, DGS2, DTWEXBGS,
                                 DCOILWTICO, GOLDPMGBD228NLBM, VIXCLS, etc.)
-``get_pboc_ops``                central_bank, china                               Tushare cb_op
+``get_pboc_ops``                central_bank, china                               PBOC website mirror
 ``get_lhb_ranking``             institutional_flow                                Tushare top_list
 ``get_yield_curve_cn``          central_bank, yield_curve                         Tushare yc_cb
 ``get_us_china_spread``         yield_curve                                       Tushare yc_cb + FRED DGS10
@@ -96,7 +96,9 @@ def get_pboc_ops(
     """
     Retrieve People's Bank of China open-market operations over a window.
 
-    Captures daily injections / withdrawals via reverse repo, MLF, SLF, etc.
+    Captures PBOC open-market announcements from the official website mirror,
+    including reverse repo, outright reverse repo, treasury trades, CBS, SFISF,
+    central-bank bills and treasury cash management notices.
     Used by ``central_bank`` (assess monetary stance) and ``china`` (track
     domestic policy direction).
 
@@ -105,7 +107,8 @@ def get_pboc_ops(
         look_back_days: window length in calendar days, default 7.
 
     Returns:
-        Markdown header + CSV with ``op_type``, ``volume``, ``rate``, ``term``.
+        Markdown header + CSV with title, operation type, amount, rate, term
+        and source URL fields.
     """
     return route_to_vendor("get_pboc_ops", curr_date, look_back_days)
 

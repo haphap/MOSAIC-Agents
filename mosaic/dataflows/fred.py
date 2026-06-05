@@ -34,6 +34,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -186,7 +187,7 @@ def _request_observations(
         response.raise_for_status()
     except requests.RequestException as exc:
         raise DataVendorUnavailable(
-            f"FRED request for series {series_id!r} failed: {exc}"
+            f"FRED request for series {series_id!r} failed: {_redact_http_error(exc)}"
         ) from exc
 
     try:
@@ -203,6 +204,16 @@ def _request_observations(
         )
 
     return payload
+
+
+def _redact_http_error(exc: BaseException) -> str:
+    text = str(exc)
+    return re.sub(
+        r"([?&](?:api_key|apikey|token|access_token)=)[^\s&#]+",
+        r"\1<redacted>",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 def _observations_to_rows(payload: dict[str, Any]) -> list[tuple[str, float | None]]:

@@ -263,20 +263,18 @@ export const CommoditiesSchema = z
     oil_regime: z
       .enum(["BACKWARDATION", "CONTANGO", "NEUTRAL"])
       .describe(
-        "Crude (WTI, FRED DCOILWTICO) curve state. BACKWARDATION = front > back (tight); " +
-          "CONTANGO = back > front (slack).",
+        "Crude-oil regime inferred from the commodity futures basket and optional WTI cross-check. " +
+          "BACKWARDATION = tight/upward crude path; CONTANGO = slack/weak crude path.",
       ),
     metals_regime: z
       .enum(["RISK_ON", "RISK_OFF", "ROTATING"])
       .describe(
-        "Industrial / precious metals regime inferred from gold (FRED " +
-          "GOLDPMGBD228NLBM) trend + correlation with bond yields.",
+        "Industrial / precious metals regime inferred from copper, ferrous and gold futures paths.",
       ),
     ag_regime: z
       .enum(["TIGHT", "BALANCED", "GLUT"])
       .describe(
-        "Agricultural commodities supply-demand state. Phase 0 lacks ag-specific " +
-          "FRED series; infer from oil + metals + USD direction (proxy).",
+        "Agricultural commodities supply-demand state inferred from soybean meal + energy.",
       ),
     china_demand_signal: z
       .enum(["ACCELERATING", "STEADY", "DECELERATING"])

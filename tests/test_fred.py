@@ -160,6 +160,32 @@ class TestFetch:
             with pytest.raises(DataVendorUnavailable, match="failed"):
                 fred.get_fred_series("FEDFUNDS", "2024-01-01", "2024-06-30")
 
+    def test_http_failure_redacts_api_key(self, monkeypatch, mock_response_factory):
+        import requests as real_requests
+
+        monkeypatch.setenv("FRED_API_KEY", "fake-secret")
+        url = (
+            "https://api.stlouisfed.org/fred/series/observations?"
+            "series_id=BAD&api_key=fake-secret&file_type=json"
+        )
+        with mock.patch.object(
+            fred.requests,
+            "get",
+            return_value=mock_response_factory(
+                None,
+                status_code=400,
+                raises=real_requests.HTTPError(
+                    f"400 Client Error: Bad Request for url: {url}"
+                ),
+            ),
+        ):
+            with pytest.raises(DataVendorUnavailable) as exc:
+                fred.get_fred_series("BAD", "2024-01-01", "2024-06-30")
+
+        message = str(exc.value)
+        assert "fake-secret" not in message
+        assert "api_key=<redacted>" in message
+
 
 # --------------------------------------------------------------------- caching
 

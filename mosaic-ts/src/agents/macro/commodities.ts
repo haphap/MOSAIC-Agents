@@ -1,9 +1,9 @@
 /**
  * commodities Layer-1 macro agent (Plan §5.1).
  *
- * Plan §5.1 tools: `get_commodity_prices` (now available — macro-tools gap
- * closed, plan §14 #8) + `get_fred_series(DCOILWTICO, GOLDPMGBD228NLBM)`.
- * `get_yield_curve_cn` retained as a China-demand proxy.
+ * Plan §5.1 tools: `get_commodity_prices` (commodity futures basket) +
+ * optional `get_fred_series` macro cross-checks. `get_yield_curve_cn`
+ * retained as a China-demand proxy.
  */
 
 import type { CommoditiesOutput } from "../types.js";

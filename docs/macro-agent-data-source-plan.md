@@ -247,7 +247,8 @@ implementation_status
 
 Evidence sources:
 
-- Tushare `cb_op` 或 catalog 中验证后的央行公开市场操作 endpoint。
+- PBOC 公开市场业务网页镜像（`mosaic.dataflows.pboc_ops`）：公开市场业务公告、交易公告、
+  买断式逆回购、国债买卖、中央银行票据、CBS、SFISF、中央国库现金管理等栏目。
 - Tushare `shibor`, `shibor_quote`, `yc_cb`。
 - FRED `FEDFUNDS`, `DFF`, `SOFR` 相关利率序列。
 - OpenCLI query bundle：PBOC、MLF、OMO、reserve requirement、Fed、FOMC。

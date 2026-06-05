@@ -114,7 +114,7 @@ DEFAULT_CONFIG = {
         "etf_reference_data": "tushare",
         "broker_research": "tushare",
         "stock_research": "tushare",
-        "macro_data": "tushare,fred,akshare",
+        "macro_data": "pbc,tushare,fred,akshare",
     },
     # Tool-level configuration (takes precedence over category-level).
     "tool_vendors": {
@@ -137,7 +137,7 @@ DEFAULT_CONFIG = {
         "get_broker_research": "tushare",
         "get_stock_research": "tushare",
         # Macro layer (Phase 0 Day 3+)
-        "get_pboc_ops": "tushare",
+        "get_pboc_ops": "pbc",
         "get_lhb_ranking": "tushare",
         "get_yield_curve_cn": "tushare",
         "get_us_china_spread": "tushare,fred",

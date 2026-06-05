@@ -6,7 +6,7 @@ analysts (Plan §5.1):
 ==================================  =====================================  ============================================================
 Function                            Vendor / endpoint                      Used by (Layer-1 agents)
 ==================================  =====================================  ============================================================
-:func:`get_pboc_ops`                Tushare ``cb_op``                      ``central_bank``, ``china``
+:func:`get_pboc_ops`                PBOC website mirror                    ``central_bank``, ``china``
 :func:`get_lhb_ranking`             Tushare ``top_list``                   ``institutional_flow``
 :func:`get_yield_curve_cn`          Tushare ``yc_cb``                      ``central_bank``, ``yield_curve``
 :func:`get_us_china_spread`         Tushare ``yc_cb`` + FRED ``DGS10``     ``yield_curve``
@@ -21,7 +21,7 @@ chain decides what to do.
 
 Endpoint disclaimer
 -------------------
-Several endpoint names follow the plan exactly (``cb_op``, ``yc_cb``,
+Several endpoint names follow the plan exactly (``yc_cb``,
 ``anns_d``) but have not yet been live-verified against the current Tushare
 API surface. If a name turns out to differ, the call site here is the only
 place to update — the rest of the system (interface routing, tests, bridge)
@@ -130,27 +130,14 @@ def _df_to_markdown_csv(
 
 
 def get_pboc_ops(curr_date: str, look_back_days: int = 7) -> str:
-    """Fetch People's Bank of China open-market operations over a window.
-
-    Window = ``[curr_date - look_back_days, curr_date]``. The Tushare endpoint
-    ``cb_op`` returns daily injections / withdrawals via reverse repo, MLF,
-    SLF, etc. (operation type, volume, rate, term).
+    """Fetch People's Bank of China open-market announcements over a window.
 
     Used by Layer-1 agents ``central_bank`` (assess monetary stance) and
     ``china`` (track domestic policy direction).
     """
-    start_date, end_date = _date_range_from_lookback(curr_date, look_back_days)
-    df = _query_tushare(
-        "cb_op",
-        start_date=_to_tushare_date(start_date),
-        end_date=_to_tushare_date(end_date),
-    )
-    return _df_to_markdown_csv(
-        df,
-        title=f"PBOC Open Market Operations ({start_date} → {end_date})",
-        subtitle="Source: Tushare cb_op. Columns include op_type, volume (亿元), rate, term.",
-        empty_note=f"No PBOC operations recorded between {start_date} and {end_date}.",
-    )
+    from .pboc_ops import get_pboc_ops as _get_pboc_ops_from_pbc  # noqa: PLC0415
+
+    return _get_pboc_ops_from_pbc(curr_date, look_back_days)
 
 
 # ============================================================ 3. LHB ranking

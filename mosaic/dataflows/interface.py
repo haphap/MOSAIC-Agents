@@ -157,6 +157,7 @@ VENDOR_LIST = [
     "fred",
     "akshare",
     "tsinghua",
+    "pbc",
 ]
 
 # Mapping of methods to their vendor-specific implementations
@@ -241,6 +242,9 @@ VENDOR_METHODS = {
         "fred": get_fred_series_impl,
     },
     "get_pboc_ops": {
+        "pbc": get_pboc_ops_impl,
+        # Backward-compatible alias for persisted configs created before the
+        # direct PBOC website mirror replaced the stale Tushare cb_op path.
         "tushare": get_pboc_ops_impl,
     },
     "get_lhb_ranking": {
