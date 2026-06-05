@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { checkPromptRegistryAssets } from "../src/agents/prompts/registry_asset_checks.js";
 import {
   loadPromptAssetJson,
   loadPromptAssetText,
@@ -29,6 +30,49 @@ function putAsset(repo: string, relativePath: string, body: string): string {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, body, "utf-8");
   return path;
+}
+
+function putJsonAsset(repo: string, relativePath: string, body: unknown): string {
+  return putAsset(repo, relativePath, JSON.stringify(body));
+}
+
+function putMinimalRkeAssets(repo: string, overrides: { researchOnlyCap?: number } = {}): void {
+  putAsset(repo, "shared_contracts/rke_runtime_contract.md", "# Contract\n\nConfidence Policy");
+  putJsonAsset(repo, "shared_contracts/confidence_policy.v1.json", {
+    confidence_policy_id: "confidence_policy.v1",
+    formula: { final_confidence: "min(data_confidence, research_confidence, confidence_cap)" },
+    caps: { research_only: overrides.researchOnlyCap ?? 0.5 },
+  });
+  putJsonAsset(repo, "shared_contracts/rule_aggregation_policy.v1.json", {
+    rule_aggregation_policy_id: "rule_aggregation_policy.v1",
+    conflict_object_required: true,
+  });
+  putJsonAsset(repo, promptIrPath("macro.central_bank"), {
+    agent_id: "macro.central_bank",
+    guardrails: ["research_only_no_trade"],
+    status: { production_allowed: false },
+  });
+  putAsset(repo, "rendered_prompts/macro.central_bank.rke.md", "# macro.central_bank");
+  putJsonAsset(repo, "agent_overlays/macro.central_bank.rke.json", {
+    prompt_ir_ref: promptIrPath("macro.central_bank"),
+    rendered_prompt_ref: "rendered_prompts/macro.central_bank.rke.md",
+    shared_contract_refs: [
+      "shared_contracts/rke_runtime_contract.md",
+      "shared_contracts/confidence_policy.v1.json",
+      "shared_contracts/rule_aggregation_policy.v1.json",
+    ],
+  });
+  putJsonAsset(repo, "cohort_overlays/cohort_default/macro.central_bank.rke.json", {
+    prompt_ir_ref: promptIrPath("macro.central_bank"),
+    production_allowed: false,
+  });
+  putJsonAsset(repo, "mutation_patches/central_bank_parameter_update.json", {
+    mutation: {
+      target_path:
+        "/rule_packs/macro.central_bank.liquidity.v1/rules/macro.central_bank.soft.001/learnable_parameters/net_injection_window_days/value",
+    },
+    production_allowed: false,
+  });
 }
 
 describe("prompt registry assets", () => {
@@ -136,5 +180,31 @@ describe("prompt registry assets", () => {
         promptsRoot: "/tmp/MOSAIC-Prompts/prompts/mosaic",
       }),
     ).toThrow(/must not traverse/);
+  });
+
+  it("accepts a complete RKE prompt registry asset set", async () => {
+    const repo = makePromptRepo();
+    repos.push(repo);
+    putMinimalRkeAssets(repo.repo);
+
+    const result = await checkPromptRegistryAssets({ promptsRoot: repo.promptsRoot });
+
+    expect(result.ready).toBe(true);
+    expect(result.failures).toEqual([]);
+    expect(result.checkedAssets).toContain("shared_contracts/confidence_policy.v1.json");
+  });
+
+  it("rejects research-only confidence caps above the no-trade limit", async () => {
+    const repo = makePromptRepo();
+    repos.push(repo);
+    putMinimalRkeAssets(repo.repo, { researchOnlyCap: 0.6 });
+
+    const result = await checkPromptRegistryAssets({ promptsRoot: repo.promptsRoot });
+
+    expect(result.ready).toBe(false);
+    expect(result.failures).toContainEqual({
+      relativePath: "shared_contracts/confidence_policy.v1.json",
+      reason: "research_only confidence cap must be <= 0.50",
+    });
   });
 });

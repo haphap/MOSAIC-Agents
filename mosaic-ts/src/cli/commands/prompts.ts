@@ -8,8 +8,10 @@
 
 import type { Command } from "commander";
 import pc from "picocolors";
+import { checkPromptRegistryAssets } from "../../agents/prompts/registry_asset_checks.js";
 import { BridgeApi, BridgeClient, RpcError } from "../../bridge/index.js";
 import { redactSensitiveText } from "../../security/redaction.js";
+import { applyPromptSourceOverrides } from "../prompt-source.js";
 
 interface InitPrivateRepoOpts {
   seedBaseline?: boolean;
@@ -30,6 +32,12 @@ interface VerifyReleaseOpts {
 interface GcWorktreesOpts {
   repoTarget?: "project_git" | "private_git" | "all";
   maxAgeHours?: string;
+}
+
+interface CheckRegistryAssetsOpts {
+  promptsRepo?: string;
+  promptsRoot?: string;
+  json?: boolean;
 }
 
 export function registerPrompts(program: Command): void {
@@ -145,6 +153,40 @@ export function registerPrompts(program: Command): void {
         reportError(err, client);
       } finally {
         await client.close();
+      }
+    });
+
+  prompts
+    .command("check-registry-assets")
+    .description("Validate repo-level RKE Prompt IR, shared contracts, overlays, and patches.")
+    .option("--prompts-repo <path>", "Use a private prompt git repo for this check")
+    .option("--prompts-root <path>", "Use a direct prompts/mosaic root for this check")
+    .option("--json", "Print machine-readable JSON")
+    .action(async (opts: CheckRegistryAssetsOpts) => {
+      try {
+        applyPromptSourceOverrides(opts);
+        const result = await checkPromptRegistryAssets();
+        if (opts.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          console.log(
+            result.ready
+              ? pc.green("prompt registry assets ready")
+              : pc.red("prompt registry assets blocked"),
+          );
+          console.log(
+            pc.dim(`checked=${result.checkedAssets.length} failures=${result.failures.length}`),
+          );
+          for (const failure of result.failures) {
+            console.log(
+              `  ${pc.red("no")} ${failure.relativePath}: ${redactSensitiveText(failure.reason)}`,
+            );
+          }
+        }
+        if (!result.ready) process.exitCode = 1;
+      } catch (err) {
+        console.error(pc.red(`error: ${redactSensitiveText((err as Error).message)}`));
+        process.exitCode = 1;
       }
     });
 
