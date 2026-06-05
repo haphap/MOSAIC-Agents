@@ -85,9 +85,11 @@ export function registerDailyCycle(program: Command): void {
 
         console.log(
           pc.dim(
-            `provider=${llmHandle.provider} model=${llmHandle.model}` +
-              (llmHandle.baseUrl ? ` base=${llmHandle.baseUrl}` : "") +
-              (opts.fakeLlm ? " (fake-llm)" : ""),
+            redactSensitiveText(
+              `provider=${llmHandle.provider} model=${llmHandle.model}` +
+                (llmHandle.baseUrl ? ` base=${llmHandle.baseUrl}` : "") +
+                (opts.fakeLlm ? " (fake-llm)" : ""),
+            ),
           ),
         );
 
@@ -161,14 +163,14 @@ export function registerDailyCycle(program: Command): void {
         }
       } catch (err) {
         if (err instanceof RpcError) {
-          console.error(pc.red(`bridge error [${err.code}]: ${err.message}`));
+          console.error(pc.red(`bridge error [${err.code}]: ${redactSensitiveText(err.message)}`));
         } else {
-          console.error(pc.red(`error: ${(err as Error).message}`));
+          console.error(pc.red(`error: ${redactSensitiveText((err as Error).message)}`));
         }
         const tail = client.stderrTail.trim();
         if (tail) {
           console.error(pc.dim("\n--- bridge stderr (tail) ---"));
-          console.error(pc.dim(tail.slice(-2000)));
+          console.error(pc.dim(redactSensitiveText(tail).slice(-2000)));
         }
         process.exitCode = 1;
       } finally {

@@ -180,7 +180,7 @@ export const DollarSchema = z
     agent: z.literal("dollar"),
     dxy_trend: z
       .enum(["STRENGTHENING", "STABLE", "WEAKENING"])
-      .describe("DXY (broad dollar index, FRED DTWEXBGS) trajectory over the window."),
+      .describe("Broad-dollar trajectory over the window, using exact FRED DTWEXBGS."),
     cny_pressure: z
       .enum(["HIGH", "MODERATE", "LOW"])
       .describe(

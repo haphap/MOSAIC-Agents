@@ -20,6 +20,7 @@ from .macro_data import (
     get_pboc_ops as get_pboc_ops_impl,
     get_lhb_ranking as get_lhb_ranking_impl,
     get_yield_curve_cn as get_yield_curve_cn_impl,
+    get_tushare_macro_series as get_tushare_macro_series_impl,
     get_us_china_spread as get_us_china_spread_impl,
     get_xueqiu_heat as get_xueqiu_heat_impl,
     get_industry_policy as get_industry_policy_impl,
@@ -240,6 +241,7 @@ VENDOR_METHODS = {
     },
     # macro_data
     "get_fred_series": {
+        "tushare": get_tushare_macro_series_impl,
         "fred": get_fred_series_impl,
     },
     "get_pboc_ops": {

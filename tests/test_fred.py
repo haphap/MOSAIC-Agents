@@ -141,8 +141,11 @@ class TestFetch:
         with mock.patch.object(
             fred.requests, "get", return_value=mock_response_factory(err_payload)
         ):
-            with pytest.raises(DataVendorUnavailable, match="Series does not exist"):
-                fred.get_fred_series("NONSENSE", "2024-01-01", "2024-06-30")
+            out = fred.get_fred_series("NONSENSE", "2024-01-01", "2024-06-30")
+
+        assert out.startswith("# FRED series NONSENSE, 2024-01-01 to 2024-06-30")
+        assert "# FRED unavailable:" in out
+        assert out.rstrip().endswith("date,value")
 
     def test_http_failure_wraps_to_data_vendor_unavailable(
         self, monkeypatch, mock_response_factory
@@ -157,10 +160,15 @@ class TestFetch:
                 None, status_code=500, raises=real_requests.HTTPError("500 Server Error")
             ),
         ):
-            with pytest.raises(DataVendorUnavailable, match="failed"):
-                fred.get_fred_series("FEDFUNDS", "2024-01-01", "2024-06-30")
+            out = fred.get_fred_series("FEDFUNDS", "2024-01-01", "2024-06-30")
 
-    def test_http_failure_redacts_api_key(self, monkeypatch, mock_response_factory):
+        assert out.startswith("# FRED series FEDFUNDS, 2024-01-01 to 2024-06-30")
+        assert "# FRED unavailable:" in out
+        assert out.rstrip().endswith("date,value")
+
+    def test_http_400_returns_empty_csv_and_redacts_api_key(
+        self, monkeypatch, mock_response_factory
+    ):
         import requests as real_requests
 
         monkeypatch.setenv("FRED_API_KEY", "fake-secret")
@@ -179,12 +187,11 @@ class TestFetch:
                 ),
             ),
         ):
-            with pytest.raises(DataVendorUnavailable) as exc:
-                fred.get_fred_series("BAD", "2024-01-01", "2024-06-30")
+            out = fred.get_fred_series("BAD", "2024-01-01", "2024-06-30")
 
-        message = str(exc.value)
-        assert "fake-secret" not in message
-        assert "api_key=<redacted>" in message
+        assert "fake-secret" not in out
+        assert "api_key=<redacted>" in out
+        assert out.rstrip().endswith("date,value")
 
 
 # --------------------------------------------------------------------- caching

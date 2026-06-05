@@ -41,12 +41,18 @@ export function bindStructured<TSchema extends z.ZodType>(
   invoke: (input: unknown, options?: { signal?: AbortSignal }) => Promise<z.infer<TSchema>>;
 } | null {
   try {
+    const schemaWithCanonicalAgent = z.preprocess(
+      (value) => canonicalizeAgentField(value, agentName),
+      schema,
+    );
     // withStructuredOutput return type is provider-dependent; erase via any.
     // biome-ignore lint/suspicious/noExplicitAny: return type depends on provider
-    const bound = (llm as any).withStructuredOutput(schema);
+    const bound = (llm as any).withStructuredOutput(schemaWithCanonicalAgent);
     return {
-      invoke: (input: unknown, options?: { signal?: AbortSignal }) =>
-        bound.invoke(input, options) as Promise<z.infer<TSchema>>,
+      invoke: async (input: unknown, options?: { signal?: AbortSignal }) => {
+        const result = await bound.invoke(input, options);
+        return canonicalizeExistingAgentField(result, agentName) as z.infer<TSchema>;
+      },
     };
   } catch (err) {
     emitStructuredLog(
@@ -252,7 +258,7 @@ export async function invokeStructuredOrFreetext<T>(
   const parsed = tryParseJsonObject(content);
   if (parsed !== null) {
     try {
-      const result = schema.parse(parsed);
+      const result = schema.parse(canonicalizeAgentField(parsed, agentName));
       return { rendered: render(result), structured: result };
     } catch (err) {
       emitStructuredLog(
@@ -271,6 +277,25 @@ function emitStructuredLog(onLog: ((msg: string) => void) | undefined, message: 
   } else {
     console.warn(message);
   }
+}
+
+function canonicalizeAgentField(value: unknown, agentName: string): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  return { ...value, agent: agentName };
+}
+
+function canonicalizeExistingAgentField(value: unknown, agentName: string): unknown {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    !Object.hasOwn(value, "agent")
+  ) {
+    return value;
+  }
+  return { ...value, agent: agentName };
 }
 
 function buildJsonFallbackSystem<T>(

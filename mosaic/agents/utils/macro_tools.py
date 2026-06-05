@@ -18,9 +18,9 @@ Coverage (8 tools, Plan §5.1 Layer-1):
 ==============================  ================================================  =====================================
 Tool                            Used by                                           Vendor
 ==============================  ================================================  =====================================
-``get_fred_series``             central_bank, dollar, yield_curve, commodities,   FRED
-                                volatility (FEDFUNDS, DGS10, DGS2, DTWEXBGS,
-                                DCOILWTICO, GOLDPMGBD228NLBM, VIXCLS, etc.)
+``get_fred_series``             central_bank, dollar, yield_curve, commodities,   Tushare where covered,
+                                volatility (DGS* uses Tushare first;             then FRED fallback
+                                DTWEXBGS/FEDFUNDS/VIXCLS stay FRED fallback)
 ``get_pboc_ops``                central_bank, china                               PBOC website mirror
 ``get_lhb_ranking``             institutional_flow                                Tushare top_list
 ``get_yield_curve_cn``          central_bank, yield_curve                         Tushare yc_cb
@@ -40,15 +40,16 @@ from langchain_core.tools import tool
 from mosaic.dataflows.interface import route_to_vendor
 
 
-# ============================================================ FRED
+# ============================================================ Macro series (Tushare preferred, FRED fallback)
 
 
 @tool
 def get_fred_series(
     series_id: Annotated[
         str,
-        "FRED series identifier (e.g. 'FEDFUNDS', 'DGS10', 'DGS2', 'DTWEXBGS', "
-        "'DCOILWTICO', 'GOLDPMGBD228NLBM', 'VIXCLS').",
+        "Macro series identifier. Tushare is used first where available "
+        "(e.g. DGS10/DGS2 via us_tycr), then FRED fallback for exact FRED "
+        "series such as DTWEXBGS, FEDFUNDS, or VIXCLS.",
     ],
     start_date: Annotated[
         str,
@@ -60,21 +61,22 @@ def get_fred_series(
     ],
 ) -> str:
     """
-    Retrieve a FRED (Federal Reserve Economic Data) time series as CSV.
+    Retrieve a macro time series as CSV using the configured vendor chain.
 
     Used by Layer-1 macro agents to anchor monetary, FX, commodity, and
-    volatility narratives in hard, point-in-time figures. Common series:
-    FEDFUNDS / DFF for Fed funds, DGS10 / DGS2 for the U.S. yield curve,
-    DTWEXBGS for the broad dollar, DCOILWTICO for oil, VIXCLS for VIX.
+    volatility narratives in hard, point-in-time figures. Tushare covers
+    U.S. treasury curve series (DGS*) via ``us_tycr``. Unsupported or more
+    precise FRED-only series such as DTWEXBGS, FEDFUNDS, and VIXCLS fall back
+    to the FRED client.
 
     Args:
-        series_id: FRED series identifier.
+        series_id: Macro/FRED-style series identifier.
         start_date: yyyy-mm-dd inclusive lower bound.
         end_date: yyyy-mm-dd inclusive upper bound.
 
     Returns:
         CSV with header line ``date,value``. Missing observations come back as
-        empty cells. Output prefixed by a ``# FRED series ...`` markdown comment.
+        empty cells. Output is prefixed by a vendor/source markdown comment.
     """
     return route_to_vendor("get_fred_series", series_id, start_date, end_date)
 
@@ -188,11 +190,11 @@ def get_us_china_spread(
     """
     Compute the U.S.–China 10-year sovereign yield spread over a window.
 
-    Composite metric: U.S. 10Y from FRED ``DGS10`` minus China 10Y from
-    Tushare ``yc_cb`` (curve_type=0). Reported as ``spread_bps =
-    (us_10y_pct - cn_10y_pct) * 100`` for each trading date that has both
-    legs. Used by ``yield_curve`` to anchor reports on a hard cross-market
-    metric.
+    Composite metric: U.S. 10Y from Tushare ``us_tycr.y10`` first (FRED
+    ``DGS10`` fallback) minus China 10Y from Tushare ``yc_cb`` (curve_type=0).
+    Reported as ``spread_bps = (us_10y_pct - cn_10y_pct) * 100`` for each
+    trading date that has both legs. Used by ``yield_curve`` to anchor reports
+    on a hard cross-market metric.
 
     Args:
         curr_date: yyyy-mm-dd window end.
