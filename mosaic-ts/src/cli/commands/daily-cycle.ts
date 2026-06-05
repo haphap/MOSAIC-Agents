@@ -40,6 +40,8 @@ interface DailyCycleOptions {
   llmProvider?: string;
   model?: string;
   baseUrl?: string;
+  promptsRepo?: string;
+  promptsRoot?: string;
   out?: string;
   vetoThreshold?: string;
   agentTimeoutSeconds?: string;
@@ -58,6 +60,8 @@ export function registerDailyCycle(program: Command): void {
     .option("--llm-provider <name>", "Override LLM provider from bridge config")
     .option("--model <name>", "Override LLM model id (e.g. local Lemonade Qwen)")
     .option("--base-url <url>", "Override LLM base URL (e.g. http://127.0.0.1:8020/api/v0)")
+    .option("--prompts-repo <path>", "Use a private prompt git repo for this run")
+    .option("--prompts-root <path>", "Use a direct prompts/mosaic root for this run")
     .option("--out <path>", "Write the final state JSON to <path> instead of pretty-printing")
     .option(
       "--veto-threshold <num>",
@@ -71,6 +75,16 @@ export function registerDailyCycle(program: Command): void {
       const client = new BridgeClient();
       const api = new BridgeApi(client);
       try {
+        if (opts.promptsRepo && opts.promptsRoot) {
+          throw new Error("use either --prompts-repo or --prompts-root, not both");
+        }
+        if (opts.promptsRepo) {
+          process.env.MOSAIC_PROMPTS_REPO = opts.promptsRepo;
+        }
+        if (opts.promptsRoot) {
+          process.env.MOSAIC_PROMPTS_ROOT = opts.promptsRoot;
+        }
+
         await client.start();
         const config = await api.configGet();
 
@@ -92,6 +106,7 @@ export function registerDailyCycle(program: Command): void {
             ),
           ),
         );
+        console.log(pc.dim(redactSensitiveText(`prompts=${configuredPromptSourceLabel()}`)));
 
         const cohort = opts.cohort ?? config.active_cohort ?? "cohort_default";
         const asOfDate = opts.date ?? new Date().toISOString().slice(0, 10);
@@ -177,6 +192,15 @@ export function registerDailyCycle(program: Command): void {
         await client.close();
       }
     });
+}
+
+function configuredPromptSourceLabel(): string {
+  const explicitRoot = process.env.MOSAIC_PROMPTS_ROOT?.trim();
+  if (explicitRoot) return `private-root:${explicitRoot}`;
+  const repo =
+    process.env.MOSAIC_PROMPTS_REPO?.trim() ?? process.env.MOSAIC_PRIVATE_PROMPT_REPO?.trim();
+  if (repo) return `private-repo:${repo}`;
+  return "bundled";
 }
 
 // ---------------------------------------------------------------------------
