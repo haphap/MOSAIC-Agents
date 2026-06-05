@@ -158,6 +158,7 @@ VENDOR_LIST = [
     "akshare",
     "tsinghua",
     "pbc",
+    "govcn",
 ]
 
 # Mapping of methods to their vendor-specific implementations
@@ -261,6 +262,9 @@ VENDOR_METHODS = {
         "akshare": get_xueqiu_heat_impl,
     },
     "get_industry_policy": {
+        "govcn": get_industry_policy_impl,
+        # Backward-compatible alias for persisted configs created before the
+        # gov.cn policy document library replaced the Tushare news path.
         "tushare": get_industry_policy_impl,
     },
     "get_usdcny": {

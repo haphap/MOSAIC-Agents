@@ -291,7 +291,7 @@ Secondary labels:
 Implementation tasks:
 
 - 建 `china_macro_release_series`，低频宏观数据只作为 evidence/event，不直接当 5 日收益。
-- 建 `policy_event_classifier`，从 Tushare news/research_report 和 OpenCLI 文档中抽取政策强度。
+- 建 `policy_event_classifier`，从 gov.cn 政策文件库、Tushare research_report 和 OpenCLI 文档中抽取政策强度。
 - 用政策事件后的行业/指数 forward path 做 drawdown-aware label。
 
 ### `geopolitical`

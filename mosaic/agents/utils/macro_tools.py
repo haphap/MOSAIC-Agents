@@ -27,7 +27,7 @@ Tool                            Used by                                         
 ``get_us_china_spread``         yield_curve                                       Tushare yc_cb + FRED DGS10
 ``get_xueqiu_heat``             news_sentiment                                    AkShare stock_hot_follow_xq
 ``get_news``                    news_sentiment                                    opencli / brave / yfinance
-``get_industry_policy``         china                                             Tushare news + keyword filter
+``get_industry_policy``         china                                             gov.cn policy document library
 ==============================  ================================================  =====================================
 """
 
@@ -295,29 +295,28 @@ def get_industry_policy(
     ],
     look_back_days: Annotated[
         int,
-        "How many calendar days of news to scan.",
+        "How many calendar days of policy documents to scan.",
     ] = 7,
     src: Annotated[
         str,
-        "Tushare news source channel (e.g. 'sina', 'wallstreetcn', '10jqka', "
-        "'eastmoney', 'cls', 'yuncaijing', 'fenghuang').",
-    ] = "sina",
+        "Policy source selector retained for compatibility; gov.cn is used by default.",
+    ] = "govcn",
 ) -> str:
     """
-    Retrieve policy-flagged news headlines over a window.
+    Retrieve policy documents and policy interpretation items over a window.
 
-    Pulls Tushare ``news`` for the given window and source channel, then
-    filters the body to rows containing any of a built-in policy keyword set
-    (政策, 监管, 改革, 规划, 国务院, 央行, 证监会, 工信部, 发改委, 财政部,
-    产业, 新质生产力, ...). Used by ``china`` (policy-direction signal).
+    Pulls the public gov.cn State Council policy document library for the
+    given window. The source includes 国务院文件、国务院部门文件、国务院公报
+    and 政策解读, with title, issuing body, document number, topic, summary,
+    and URL fields. Used by ``china`` (policy-direction signal).
 
     Args:
         curr_date: yyyy-mm-dd window end.
         look_back_days: window length in calendar days, default 7.
-        src: Tushare news source channel, default 'sina'.
+        src: source selector kept for bridge compatibility, default 'govcn'.
 
     Returns:
-        Markdown header + CSV. Empty result if no policy-flagged rows match.
+        Markdown header + CSV. Empty result if no policy documents match.
     """
     return route_to_vendor("get_industry_policy", curr_date, look_back_days, src)
 

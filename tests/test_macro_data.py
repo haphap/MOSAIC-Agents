@@ -388,34 +388,29 @@ def test_get_property_data_rejects_zero_top_n():
 # --------------------------------------------------------------------- 7. Industry policy
 
 
-def test_get_industry_policy_filters_keywords(mock_query_pro):
-    canned = _df_with_rows(
-        [
-            {
-                "datetime": "2024-06-25 10:00",
-                "title": "国务院发布新质生产力发展规划",
-                "content": "国务院今日发布关于推动新质生产力发展的指导意见，重点支持半导体...",
-            },
-            {
-                "datetime": "2024-06-25 12:30",
-                "title": "茅台股价创新高",
-                "content": "贵州茅台早盘冲高，市值再创历史新高。",
-            },
-        ]
+def test_get_industry_policy_uses_gov_policy_source(monkeypatch):
+    calls = {}
+
+    def fake_get_gov_policy_documents(curr_date, look_back_days, *, keywords=None):
+        calls["args"] = (curr_date, look_back_days)
+        calls["keywords"] = keywords
+        return "gov policy csv"
+
+    monkeypatch.setattr(
+        macro_data,
+        "get_gov_policy_documents",
+        fake_get_gov_policy_documents,
     )
-    mock_query_pro(canned)
 
-    out = macro_data.get_industry_policy("2024-06-30", look_back_days=7)
+    out = macro_data.get_industry_policy(
+        "2024-06-30",
+        look_back_days=7,
+        src="wallstreetcn",
+        keywords=("能源",),
+    )
 
-    assert "Industry Policy News" in out
-    assert "新质生产力" in out
-    assert "茅台" not in out  # filtered out
-
-
-def test_get_industry_policy_empty_results(mock_query_pro):
-    mock_query_pro(pd.DataFrame())
-    out = macro_data.get_industry_policy("2024-06-30", look_back_days=7)
-    assert "No policy-flagged news rows" in out
+    assert out == "gov policy csv"
+    assert calls == {"args": ("2024-06-30", 7), "keywords": ("能源",)}
 
 
 # --------------------------------------------------------------------- 8. USD/CNY

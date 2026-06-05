@@ -390,7 +390,7 @@ export const NewsSentimentSchema = z
       .min(-1)
       .max(1)
       .describe(
-        "Retail sentiment from Xueqiu hot-follow + recent policy news, scaled to [-1, 1]. " +
+        "Retail sentiment from Xueqiu hot-follow + recent policy documents, scaled to [-1, 1]. " +
           "+1 = euphoria; -1 = capitulation.",
       ),
     hot_topics: STRING_LIST_1_8(
@@ -407,7 +407,7 @@ export const NewsSentimentSchema = z
     confidence: CONFIDENCE,
   })
   .describe(
-    "Retail-sentiment read built from Xueqiu hot-follow + filtered policy news. The " +
+    "Retail-sentiment read built from Xueqiu hot-follow + gov.cn policy documents. The " +
       "contrarian_flag is the most actionable downstream signal.",
   );
 

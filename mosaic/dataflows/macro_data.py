@@ -11,7 +11,7 @@ Function                            Vendor / endpoint                      Used 
 :func:`get_yield_curve_cn`          Tushare ``yc_cb``                      ``central_bank``, ``yield_curve``
 :func:`get_us_china_spread`         Tushare ``yc_cb`` + FRED ``DGS10``     ``yield_curve``
 :func:`get_xueqiu_heat`             AkShare ``stock_hot_search_xq``        ``news_sentiment``
-:func:`get_industry_policy`         Tushare ``news`` (filtered)            ``china``
+:func:`get_industry_policy`         gov.cn policy document library         ``china``
 ==================================  =====================================  ============================================================
 
 All public functions return ``str`` (markdown-with-CSV body) so they slot into
@@ -39,6 +39,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from .exceptions import DataVendorUnavailable
+from .gov_policy import get_gov_policy_documents
 
 logger = logging.getLogger(__name__)
 
@@ -393,80 +394,29 @@ def get_xueqiu_heat(ticker: str | None = None, top_n: int = 30) -> str:
 # ============================================================ 7. Industry policy
 
 
-_DEFAULT_POLICY_KEYWORDS = (
-    "政策",
-    "监管",
-    "改革",
-    "规划",
-    "通知",
-    "意见",
-    "国务院",
-    "央行",
-    "证监会",
-    "工信部",
-    "发改委",
-    "财政部",
-    "产业",
-    "新质生产力",
-)
-
-
 def get_industry_policy(
     curr_date: str,
     look_back_days: int = 7,
+    src: str = "govcn",
+    *,
     keywords: tuple[str, ...] | None = None,
-    src: str = "sina",
 ) -> str:
-    """Fetch policy-relevant news headlines over a window.
+    """Fetch policy-relevant documents over a window.
 
-    Window = ``[curr_date - look_back_days, curr_date]``. We hit Tushare
-    ``news`` (新闻快讯) — a broad real-time newsfeed across multiple sources —
-    then filter the body to rows containing any of the supplied keywords. The
-    default keyword list targets central-government and regulator policy
-    language.
+    The default source is the public State Council policy document library
+    behind ``https://www.gov.cn/zhengce/zhengcewenjianku/index.htm``.  It
+    provides structured government, department, gazette, and policy-interpretation
+    records without Tushare ``news`` permissions.
 
-    Used by ``china`` (policy-direction signal) and indirectly by sector
-    agents looking for industry-specific catalysts.
-
-    The plan §11 mentions ``anns_d``; that endpoint surfaces issuer-level
-    company filings rather than policy news, so we route through the
-    higher-recall ``news`` endpoint and filter. If the schema differs we
-    fall back to returning the raw frame.
+    ``src`` is retained for the existing bridge schema.  Values other than
+    ``govcn`` are accepted for backward compatibility but do not route back to
+    Tushare.
     """
-    start_date, end_date = _date_range_from_lookback(curr_date, look_back_days)
-
-    df = _query_tushare(
-        "news",
-        start_date=_to_tushare_date(start_date),
-        end_date=_to_tushare_date(end_date),
-        src=src,
-    )
-
-    keywords = keywords or _DEFAULT_POLICY_KEYWORDS
-    if df is not None and not df.empty:
-        text_cols = [c for c in ("content", "title") if c in df.columns]
-        if text_cols:
-            mask = False
-            for col in text_cols:
-                col_str = df[col].astype(str)
-                col_mask = False
-                for kw in keywords:
-                    col_mask = col_mask | col_str.str.contains(kw, na=False)
-                mask = mask | col_mask
-            try:
-                df = df[mask]
-            except Exception:
-                # If mask logic above degraded to a scalar bool, fall through.
-                pass
-
-    return _df_to_markdown_csv(
-        df,
-        title=f"产业政策 / Industry Policy News ({start_date} → {end_date})",
-        subtitle=(
-            f"Source: Tushare news (src={src}); "
-            f"keyword filter: {', '.join(keywords)}"
-        ),
-        empty_note=f"No policy-flagged news rows between {start_date} and {end_date}.",
+    _ = src
+    return get_gov_policy_documents(
+        curr_date,
+        look_back_days,
+        keywords=keywords,
     )
 
 
