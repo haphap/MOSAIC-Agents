@@ -570,8 +570,16 @@ def load_gov_policy_records(cache_dir: str | Path | None = None) -> list[dict[st
     return _load_records(gov_policy_cache_dir(cache_dir))
 
 
-def _load_external_gov_policy_records() -> tuple[list[dict[str, Any]], str] | None:
-    return load_external_records("gov_policy/parsed/policy_documents.jsonl")
+def _load_external_gov_policy_records(
+    *,
+    local_root: Path | None = None,
+    discover_local: bool = True,
+) -> tuple[list[dict[str, Any]], str] | None:
+    return load_external_records(
+        "gov_policy/parsed/policy_documents.jsonl",
+        local_root=local_root,
+        discover_local=discover_local,
+    )
 
 
 def _ensure_china_policy_db_gov_policy_updated(
@@ -580,10 +588,10 @@ def _ensure_china_policy_db_gov_policy_updated(
     end_date: str,
     fetcher: FetchJson | None = None,
     max_pages_per_category: int = _DEFAULT_MAX_PAGES,
-) -> str | None:
+) -> tuple[str | None, Path | None]:
     local = ensure_local_repo()
     if not local:
-        return None
+        return None, None
     root, source = local
     cache_root = root / "data" / "gov_policy"
     try:
@@ -596,9 +604,9 @@ def _ensure_china_policy_db_gov_policy_updated(
         )
     except DataVendorUnavailable as exc:
         logger.warning("china-policy-db gov.cn policy incremental refresh skipped: %s", exc)
-        return f"local repo; refresh skipped after gov.cn policy error: {exc}"
+        return f"local repo; refresh skipped after gov.cn policy error: {exc}", root
     if not run:
-        return "local repo; fresh"
+        return "local repo; fresh", root
 
     git = commit_and_maybe_push_updates(
         root,
@@ -610,6 +618,8 @@ def _ensure_china_policy_db_gov_policy_updated(
         git_note = "; committed"
     if git.get("pushed"):
         git_note += "; pushed"
+    if git.get("skipped_commit"):
+        git_note += "; uncommitted local update"
     if git.get("error"):
         git_note += "; git update failed"
     return (
@@ -617,7 +627,7 @@ def _ensure_china_policy_db_gov_policy_updated(
         f"(pages={run['fetched_pages']}, new_records={run['new_records']}, "
         f"parsed={run['parsed_records']})"
         f"{git_note}; root={source}"
-    )
+    ), root
 
 
 def _records_in_window(
@@ -697,14 +707,17 @@ def get_gov_policy_documents(
     """Return gov.cn policy documents for a date window."""
     start_date, end_date = _date_window(curr_date, int(look_back_days or 0))
     if cache_dir is None:
-        external_refresh_note = _ensure_china_policy_db_gov_policy_updated(
+        external_refresh_note, external_root = _ensure_china_policy_db_gov_policy_updated(
             start_date=start_date,
             end_date=end_date,
             fetcher=fetcher,
             max_pages_per_category=max_pages_per_category,
         )
         try:
-            external = _load_external_gov_policy_records()
+            external = _load_external_gov_policy_records(
+                local_root=external_root,
+                discover_local=False,
+            )
         except DataVendorUnavailable as exc:
             logger.warning("Ignoring unavailable china-policy-db gov.cn policy records: %s", exc)
             external = None

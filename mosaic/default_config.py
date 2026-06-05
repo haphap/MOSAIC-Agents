@@ -66,10 +66,6 @@ DEFAULT_CONFIG = {
         "MOSAIC_CHINA_POLICY_DB_GIT_STALE_HOURS",
         6,
     ),
-    "china_policy_db_commit_updates": _env_bool(
-        "MOSAIC_CHINA_POLICY_DB_COMMIT_UPDATES",
-        True,
-    ),
     "china_policy_db_push_updates": _env_bool("MOSAIC_CHINA_POLICY_DB_PUSH_UPDATES", False),
     # ============== LLM settings ==============
     # Default to Anthropic Claude Sonnet (Plan §1). Local Lemonade Qwen and

@@ -158,6 +158,26 @@ def _run_git(args: list[str], *, cwd: Path | None = None) -> str:
     return proc.stdout
 
 
+def _abort_rebase(root: Path) -> None:
+    try:
+        _run_git(["rebase", "--abort"], cwd=root)
+        logger.warning("Aborted wedged china-policy-db rebase at %s", root)
+    except (OSError, DataVendorUnavailable, subprocess.TimeoutExpired):
+        return
+
+
+def _is_shallow_repo(root: Path) -> bool:
+    try:
+        return _run_git(["rev-parse", "--is-shallow-repository"], cwd=root).strip() == "true"
+    except (OSError, DataVendorUnavailable, subprocess.TimeoutExpired):
+        return False
+
+
+def _unshallow_if_needed(root: Path) -> None:
+    if _is_shallow_repo(root):
+        _run_git(["fetch", "--unshallow"], cwd=root)
+
+
 def ensure_local_repo(*, stale_after_hours: float | None = None) -> tuple[Path, str] | None:
     """Ensure a local china-policy-db checkout exists and is recently pulled.
 
@@ -204,6 +224,7 @@ def ensure_local_repo(*, stale_after_hours: float | None = None) -> tuple[Path, 
                 state.update({"last_pull_at": _utc_now_iso(), "repo_url": _repo_url()})
                 _write_sync_state(root, state)
             except (OSError, DataVendorUnavailable, subprocess.TimeoutExpired) as exc:
+                _abort_rebase(root)
                 logger.warning("Failed to pull china-policy-db at %s: %s", root, exc)
     return root, str(root)
 
@@ -216,12 +237,14 @@ def commit_and_maybe_push_updates(
 ) -> dict[str, Any]:
     """Commit local china-policy-db data changes, and optionally push them.
 
-    Local commits are enabled by default so future pulls can rebase cleanly.
-    Remote pushes require ``MOSAIC_CHINA_POLICY_DB_PUSH_UPDATES=1``.
+    Local commits are made only when remote pushes are enabled, avoiding silent
+    divergence from origin. Remote pushes require
+    ``MOSAIC_CHINA_POLICY_DB_PUSH_UPDATES=1``.
     """
 
     result: dict[str, Any] = {
         "changed": False,
+        "skipped_commit": False,
         "committed": False,
         "pushed": False,
         "error": None,
@@ -235,35 +258,35 @@ def commit_and_maybe_push_updates(
             return result
         result["changed"] = True
 
-        if _config_bool(
-            "china_policy_db_commit_updates",
-            "MOSAIC_CHINA_POLICY_DB_COMMIT_UPDATES",
-            True,
-        ):
-            _run_git(["add", "--", *rel_paths], cwd=root)
-            staged = _run_git(["diff", "--cached", "--name-only", "--", *rel_paths], cwd=root).strip()
-            if staged:
-                _run_git(
-                    [
-                        "-c",
-                        f"user.name={_COMMIT_NAME}",
-                        "-c",
-                        f"user.email={_COMMIT_EMAIL}",
-                        "commit",
-                        "-m",
-                        message,
-                    ],
-                    cwd=root,
-                )
-                result["committed"] = True
-
-        if _config_bool(
+        push_updates = _config_bool(
             "china_policy_db_push_updates",
             "MOSAIC_CHINA_POLICY_DB_PUSH_UPDATES",
             False,
-        ):
-            _run_git(["push"], cwd=root)
-            result["pushed"] = True
+        )
+        if not push_updates:
+            result["skipped_commit"] = True
+            return result
+
+        _unshallow_if_needed(root)
+        _run_git(["add", "--", *rel_paths], cwd=root)
+        staged = _run_git(["diff", "--cached", "--name-only", "--", *rel_paths], cwd=root).strip()
+        if staged:
+            _run_git(
+                [
+                    "-c",
+                    f"user.name={_COMMIT_NAME}",
+                    "-c",
+                    f"user.email={_COMMIT_EMAIL}",
+                    "commit",
+                    "-m",
+                    message,
+                ],
+                cwd=root,
+            )
+            result["committed"] = True
+
+        _run_git(["push"], cwd=root)
+        result["pushed"] = True
     except (OSError, DataVendorUnavailable, subprocess.TimeoutExpired) as exc:
         result["error"] = str(exc)
         logger.warning("Failed to commit/push china-policy-db updates at %s: %s", root, exc)
@@ -277,16 +300,24 @@ def _local_candidates(root: Path, jsonl_rel_path: str) -> list[Path]:
     ]
 
 
-def load_external_records(jsonl_rel_path: str) -> tuple[list[dict[str, Any]], str] | None:
+def load_external_records(
+    jsonl_rel_path: str,
+    *,
+    local_root: Path | None = None,
+    discover_local: bool = True,
+) -> tuple[list[dict[str, Any]], str] | None:
     """Load parsed records from a configured china-policy-db source.
 
     ``jsonl_rel_path`` is relative to the published ``data/`` directory, for
     example ``pboc_ops/parsed/articles.jsonl``.
     """
 
-    local = ensure_local_repo()
-    if local:
-        root, _source = local
+    root = local_root
+    if root is None and discover_local:
+        local = ensure_local_repo()
+        if local:
+            root, _source = local
+    if root is not None:
         for path in _local_candidates(root, jsonl_rel_path):
             if path.is_file():
                 return _parse_jsonl(path.read_text(encoding="utf-8"), str(path)), str(path)
