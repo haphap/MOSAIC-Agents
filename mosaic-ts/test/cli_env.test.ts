@@ -32,12 +32,16 @@ describe("loadProjectEnv", () => {
       [
         "MOSAIC_PROMPTS_REPO=/tmp/MOSAIC-Prompts",
         'MOSAIC_PROMPTS_ROOT="/tmp/direct prompts"',
+        "MOSAIC_COMMENTED=/tmp/path # local clone",
+        'MOSAIC_QUOTED_COMMENT="/tmp/direct # prompts" # note',
         "MOSAIC_EXISTING=from-file",
       ].join("\n"),
       "utf-8",
     );
     remember("MOSAIC_PROMPTS_REPO");
     remember("MOSAIC_PROMPTS_ROOT");
+    remember("MOSAIC_COMMENTED");
+    remember("MOSAIC_QUOTED_COMMENT");
     remember("MOSAIC_EXISTING");
     process.env.MOSAIC_EXISTING = "from-shell";
 
@@ -45,6 +49,8 @@ describe("loadProjectEnv", () => {
 
     expect(process.env.MOSAIC_PROMPTS_REPO).toBe("/tmp/MOSAIC-Prompts");
     expect(process.env.MOSAIC_PROMPTS_ROOT).toBe("/tmp/direct prompts");
+    expect(process.env.MOSAIC_COMMENTED).toBe("/tmp/path");
+    expect(process.env.MOSAIC_QUOTED_COMMENT).toBe("/tmp/direct # prompts");
     expect(process.env.MOSAIC_EXISTING).toBe("from-shell");
   });
 

@@ -23,16 +23,61 @@ export function loadProjectEnv(repoRoot = findRepoRoot()): void {
 }
 
 function parseEnvValue(value: string): string {
-  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
-    return value
-      .slice(1, -1)
-      .replace(/\\n/g, "\n")
-      .replace(/\\r/g, "\r")
-      .replace(/\\"/g, '"')
-      .replace(/\\\\/g, "\\");
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"')) {
+    const end = findClosingQuote(trimmed, '"');
+    if (end > 0) {
+      return trimmed
+        .slice(1, end)
+        .replace(/\\n/g, "\n")
+        .replace(/\\r/g, "\r")
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, "\\");
+    }
   }
-  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
-    return value.slice(1, -1);
+  if (trimmed.startsWith("'")) {
+    const end = findClosingQuote(trimmed, "'");
+    if (end > 0) {
+      return trimmed.slice(1, end);
+    }
+  }
+  return stripUnquotedInlineComment(trimmed).trimEnd();
+}
+
+function findClosingQuote(value: string, quote: "'" | '"'): number {
+  for (let i = 1; i < value.length; i += 1) {
+    if (quote === '"' && value[i] === "\\") {
+      i += 1;
+      continue;
+    }
+    if (value[i] === quote) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function stripUnquotedInlineComment(value: string): string {
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (quote) {
+      if (quote === '"' && ch === "\\") {
+        i += 1;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "#" && i > 0 && /\s/.test(value[i - 1] ?? "")) {
+      return value.slice(0, i);
+    }
   }
   return value;
 }

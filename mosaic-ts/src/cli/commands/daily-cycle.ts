@@ -25,6 +25,7 @@ import {
   parseAgentTimeoutSeconds,
   resolveAgentTimeoutMs,
 } from "../../agents/helpers/runtime.js";
+import { formatPromptSourceLabel } from "../../agents/prompts/cohorts.js";
 import type { DailyCycleStateType } from "../../agents/state.js";
 import type { PortfolioAction } from "../../agents/types.js";
 import { BridgeApi, BridgeClient, RpcError } from "../../bridge/index.js";
@@ -32,6 +33,7 @@ import { buildDailyCycleGraph } from "../../graph/daily_cycle.js";
 import { createLlmFromConfig, type LlmHandle } from "../../llm/factory.js";
 import { redactSensitiveText } from "../../security/redaction.js";
 import { pad } from "../_format.js";
+import { applyPromptSourceOverrides } from "../prompt-source.js";
 
 interface DailyCycleOptions {
   cohort?: string;
@@ -75,15 +77,7 @@ export function registerDailyCycle(program: Command): void {
       const client = new BridgeClient();
       const api = new BridgeApi(client);
       try {
-        if (opts.promptsRepo && opts.promptsRoot) {
-          throw new Error("use either --prompts-repo or --prompts-root, not both");
-        }
-        if (opts.promptsRepo) {
-          process.env.MOSAIC_PROMPTS_REPO = opts.promptsRepo;
-        }
-        if (opts.promptsRoot) {
-          process.env.MOSAIC_PROMPTS_ROOT = opts.promptsRoot;
-        }
+        applyPromptSourceOverrides(opts);
 
         await client.start();
         const config = await api.configGet();
@@ -106,7 +100,7 @@ export function registerDailyCycle(program: Command): void {
             ),
           ),
         );
-        console.log(pc.dim(redactSensitiveText(`prompts=${configuredPromptSourceLabel()}`)));
+        console.log(pc.dim(redactSensitiveText(`prompts=${formatPromptSourceLabel()}`)));
 
         const cohort = opts.cohort ?? config.active_cohort ?? "cohort_default";
         const asOfDate = opts.date ?? new Date().toISOString().slice(0, 10);
@@ -192,15 +186,6 @@ export function registerDailyCycle(program: Command): void {
         await client.close();
       }
     });
-}
-
-function configuredPromptSourceLabel(): string {
-  const explicitRoot = process.env.MOSAIC_PROMPTS_ROOT?.trim();
-  if (explicitRoot) return `private-root:${explicitRoot}`;
-  const repo =
-    process.env.MOSAIC_PROMPTS_REPO?.trim() ?? process.env.MOSAIC_PRIVATE_PROMPT_REPO?.trim();
-  if (repo) return `private-repo:${repo}`;
-  return "bundled";
 }
 
 // ---------------------------------------------------------------------------

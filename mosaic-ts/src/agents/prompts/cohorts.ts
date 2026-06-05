@@ -73,21 +73,35 @@ export const ALL_AGENTS: ReadonlyArray<string> = [
 
 export const DEFAULT_COHORT = "cohort_default";
 
+export type ConfiguredPromptSource =
+  | { kind: "private-root"; root: string }
+  | { kind: "private-repo"; repo: string; root: string };
+
 /** Find the bundled ``<repoRoot>/prompts/mosaic/`` fallback prompt root. */
 export function findBundledPromptsRoot(): string {
   return join(findRepoRoot(), "prompts", "mosaic");
 }
 
-/** Find the configured private/external prompt root, if explicitly set. */
-export function findConfiguredPrivatePromptsRoot(): string | undefined {
+export function getConfiguredPromptSource(): ConfiguredPromptSource | null {
   const explicitRoot = process.env.MOSAIC_PROMPTS_ROOT?.trim();
-  if (explicitRoot) return explicitRoot;
+  if (explicitRoot) return { kind: "private-root", root: explicitRoot };
 
   const repo =
     process.env.MOSAIC_PROMPTS_REPO?.trim() ?? process.env.MOSAIC_PRIVATE_PROMPT_REPO?.trim();
-  if (repo) return join(repo, "prompts", "mosaic");
+  if (repo) return { kind: "private-repo", repo, root: join(repo, "prompts", "mosaic") };
 
-  return undefined;
+  return null;
+}
+
+/** Find the configured private/external prompt root, if explicitly set. */
+export function findConfiguredPrivatePromptsRoot(): string | undefined {
+  return getConfiguredPromptSource()?.root;
+}
+
+export function formatPromptSourceLabel(source = getConfiguredPromptSource()): string {
+  if (!source) return "bundled";
+  if (source.kind === "private-root") return `private-root:${source.root}`;
+  return `private-repo:${source.repo}`;
 }
 
 /** Find the default prompt root for all cohorts: the bundled project prompts. */
