@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import urljoin, urlparse
 
-from .china_policy_db import load_external_records
+from .china_policy_db import commit_and_maybe_push_updates, ensure_local_repo, load_external_records
 from .exceptions import DataVendorUnavailable
 
 logger = logging.getLogger(__name__)
@@ -843,6 +843,40 @@ def _load_external_pboc_records() -> tuple[list[dict[str, Any]], str] | None:
     return load_external_records("pboc_ops/parsed/articles.jsonl")
 
 
+def _ensure_china_policy_db_pboc_updated(fetcher: FetchText | None = None) -> str | None:
+    local = ensure_local_repo()
+    if not local:
+        return None
+    root, source = local
+    cache_root = root / "data" / "pboc_ops"
+    try:
+        run = ensure_pboc_open_market_updated(cache_dir=cache_root, fetcher=fetcher)
+    except DataVendorUnavailable as exc:
+        logger.warning("china-policy-db PBOC incremental refresh skipped: %s", exc)
+        return f"local repo; refresh skipped after PBOC website error: {exc}"
+    if not run:
+        return "local repo; fresh"
+
+    git = commit_and_maybe_push_updates(
+        root,
+        ["data/pboc_ops"],
+        message="Update PBOC open-market data",
+    )
+    git_note = ""
+    if git.get("committed"):
+        git_note = "; committed"
+    if git.get("pushed"):
+        git_note += "; pushed"
+    if git.get("error"):
+        git_note += "; git update failed"
+    return (
+        "local repo; incremental refresh "
+        f"(list_pages={run['fetched_list_pages']}, articles={run['fetched_articles']}, "
+        f"changed={run['changed_articles']}, unchanged={run['unchanged_articles']})"
+        f"{git_note}; root={source}"
+    )
+
+
 def _records_in_window(
     records: Iterable[dict[str, Any]],
     start_date: str,
@@ -907,6 +941,7 @@ def get_pboc_ops(
     """Return parsed PBOC open-market announcements for a date window."""
     start_date, end_date = _date_window(curr_date, int(look_back_days or 0))
     if cache_dir is None:
+        external_refresh_note = _ensure_china_policy_db_pboc_updated(fetcher=fetcher)
         try:
             external = _load_external_pboc_records()
         except DataVendorUnavailable as exc:
@@ -919,7 +954,11 @@ def get_pboc_ops(
             return _records_to_markdown_csv(
                 records,
                 title=f"PBOC Open Market Announcements ({start_date} → {end_date})",
-                subtitle=f"Source: china-policy-db ({source}). Categories: {category_names}.",
+                subtitle=(
+                    f"Source: china-policy-db ({source}"
+                    f"{'; ' + external_refresh_note if external_refresh_note else ''}). "
+                    f"Categories: {category_names}."
+                ),
                 empty_note=(
                     f"No PBOC open-market announcements recorded between "
                     f"{start_date} and {end_date}."
