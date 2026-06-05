@@ -88,3 +88,20 @@ def test_broker_reports_empty_requested_window_returns_wide_context(monkeypatch)
     assert "Fallback: 2 report(s) found within the past 120 days" in out
     assert "## Report 1: 2026-04-20 | Broker A" in out
     assert "## Report 2: 2026-03-18 | Broker B" in out
+
+
+def test_broker_reports_unresolved_industry_returns_no_data_note(monkeypatch):
+    fake = FakeResearchReportClient([_empty_reports(), _empty_reports()])
+    monkeypatch.setattr(tushare, "_get_pro_client", lambda: fake)
+
+    out = tushare.get_broker_reports(
+        "600519.SH",
+        "2026-05-01",
+        "2026-06-05",
+        max_reports=2,
+    )
+
+    assert "Industry Research Reports for unresolved industry" in out
+    assert "Period: 2026-05-01 to 2026-06-05 | Total: 0 reports" in out
+    assert "Industry keyword source: unresolved" in out
+    assert "Resolution failed: Cannot determine broker-search industry keyword" in out

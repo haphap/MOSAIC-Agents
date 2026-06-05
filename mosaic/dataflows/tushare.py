@@ -2327,12 +2327,27 @@ def get_broker_reports(
             "together with explicit extra_ind_names."
         )
     else:
-        industry, industry_source, basic_industry = _resolve_broker_industry_keyword(
-            pro,
-            ts_code,
-            start_date,
-            end_date,
-        )
+        try:
+            industry, industry_source, basic_industry = _resolve_broker_industry_keyword(
+                pro,
+                ts_code,
+                start_date,
+                end_date,
+            )
+        except DataVendorUnavailable as exc:
+            message = str(exc)
+            if not message.startswith("Cannot determine broker-search industry keyword"):
+                raise
+            return _format_no_research_reports(
+                title=f"Industry Research Reports for unresolved industry (search keyword for {ts_code})",
+                start_date=start_date,
+                end_date=end_date,
+                context_lines=[
+                    "Industry keyword source: unresolved",
+                    f"Resolution failed: {message}",
+                ],
+                max_reports=max_reports,
+            )
 
     start_api = start_date.replace("-", "")
     end_api = end_date.replace("-", "")

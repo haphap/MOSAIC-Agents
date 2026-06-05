@@ -48,7 +48,8 @@ def get_broker_research(
     drivers, policy read, and risk factors — as Markdown. Use this in Layer-2
     sector analysis to ground sector calls in sell-side industry research.
 
-    Returns a Markdown no-data note when the requested period has no reports.
+    Returns a Markdown no-data note when the requested period has no reports or
+    the stock's broker-report industry keyword cannot be resolved.
     Raises DataVendorUnavailable for non-A-share tickers, missing token, or vendor failures.
     """
     return route_to_vendor("get_broker_research", ticker, start_date, end_date, max_reports)
