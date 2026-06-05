@@ -45,6 +45,17 @@ describe("redactSensitiveText", () => {
     );
   });
 
+  it("redacts provider endpoint fields and CLI base-url arguments", () => {
+    const text =
+      "$ tsx src/cli/index.ts daily-cycle --base-url https://provider.example/v1\n" +
+      'provider=openai model=mimo-v2.5-pro base=https://provider.example/v1 config={"baseUrl":"https://provider.example/v1"}';
+
+    expect(redactSensitiveText(text)).toBe(
+      "$ tsx src/cli/index.ts daily-cycle --base-url <redacted-endpoint>\n" +
+        'provider=openai model=mimo-v2.5-pro base=<redacted-endpoint> config={"baseUrl":"<redacted-endpoint>"}',
+    );
+  });
+
   it("redacts serialized secret fields and auth headers", () => {
     const text = `headers: Authorization: Bearer sk-secret, body={"token":"tp-secret","key":"plain"}`;
 
