@@ -28,6 +28,7 @@ import type { LlmHandle } from "../../llm/factory.js";
 import { runAgentToolLoop } from "../helpers/agent_loop.js";
 import {
   AgentTimeoutError,
+  buildLlmCall,
   formatAgentEvent,
   formatDurationMs,
   resolveAgentTimeoutMs,
@@ -38,7 +39,7 @@ import {
 import { invokeStructuredOrFreetext } from "../helpers/structured_output.js";
 import { type LoaderLanguage, loadPrompt } from "../prompts/loader.js";
 import type { DailyCycleStateType, DailyCycleStateUpdate } from "../state.js";
-import type { LlmCallRecord, RegimeSignal, SectorAgentOutput } from "../types.js";
+import type { RegimeSignal, SectorAgentOutput } from "../types.js";
 
 export interface LayerTwoAgentSpec<TOutput extends SectorAgentOutput> {
   agentId: string;
@@ -266,16 +267,4 @@ function defaultExtractorSystem<TOutput extends SectorAgentOutput>(
     `supported, leave longs/shorts empty, sector_score=0, confidence ≤ 0.4. ` +
     lang
   );
-}
-
-function buildLlmCall(agentId: string, handle: LlmHandle): LlmCallRecord {
-  return {
-    ts: new Date().toISOString(),
-    agent: agentId,
-    model: handle.model,
-    provider: handle.provider,
-    prompt_tokens: 0,
-    completion_tokens: 0,
-    cost_usd: 0,
-  };
 }

@@ -34,6 +34,7 @@ import type { LlmHandle } from "../../llm/factory.js";
 import { runAgentToolLoop } from "../helpers/agent_loop.js";
 import {
   AgentTimeoutError,
+  buildLlmCall,
   formatAgentEvent,
   formatDurationMs,
   resolveAgentTimeoutMs,
@@ -44,7 +45,7 @@ import {
 import { invokeStructuredOrFreetext } from "../helpers/structured_output.js";
 import { type LoaderLanguage, loadPrompt } from "../prompts/loader.js";
 import type { DailyCycleStateType, DailyCycleStateUpdate } from "../state.js";
-import type { LlmCallRecord, MacroAgentOutput } from "../types.js";
+import type { MacroAgentOutput } from "../types.js";
 
 /**
  * Per-agent configuration for the Layer-1 factory. Each macro agent file
@@ -265,18 +266,4 @@ function defaultExtractorSystem<TOutput extends MacroAgentOutput>(
     `confidence ≤ 0.4). ` +
     lang
   );
-}
-
-function buildLlmCall(agentId: string, handle: LlmHandle): LlmCallRecord {
-  return {
-    ts: new Date().toISOString(),
-    agent: agentId,
-    model: handle.model,
-    provider: handle.provider,
-    // Token counts are 0 here. Phase 3 scorecard will plumb provider
-    // callbacks for accurate counts.
-    prompt_tokens: 0,
-    completion_tokens: 0,
-    cost_usd: 0,
-  };
 }

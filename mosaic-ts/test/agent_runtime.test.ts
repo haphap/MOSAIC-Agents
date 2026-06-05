@@ -23,6 +23,7 @@ describe("agent runtime helpers", () => {
       "[agent:done] L3 ackman elapsed=1.2s picks=3",
     );
     expect(formatDurationMs(65_000)).toBe("1m05s");
+    expect(formatDurationMs(119_999)).toBe("2m00s");
   });
 
   it("aborts and rejects when an agent exceeds its timeout", async () => {

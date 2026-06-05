@@ -1,4 +1,6 @@
+import type { LlmHandle } from "../../llm/factory.js";
 import { redactSensitiveText } from "../../security/redaction.js";
+import type { LlmCallRecord } from "../types.js";
 
 export const DEFAULT_AGENT_TIMEOUT_SECONDS = 300;
 
@@ -88,6 +90,20 @@ export function formatDurationMs(ms: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}m${String(seconds).padStart(2, "0")}s`;
+}
+
+export function buildLlmCall(agentId: string, handle: LlmHandle): LlmCallRecord {
+  return {
+    ts: new Date().toISOString(),
+    agent: agentId,
+    model: handle.model,
+    provider: handle.provider,
+    // Token counts are 0 here. Phase 3 scorecard will plumb provider
+    // callbacks for accurate counts.
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    cost_usd: 0,
+  };
 }
 
 export function safeErrorMessage(err: unknown, maxLength = 220): string {

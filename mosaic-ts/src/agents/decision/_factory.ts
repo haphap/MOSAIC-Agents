@@ -27,6 +27,7 @@ import { formatMirofishContext } from "../../mirofish/context.js";
 import { extractTextContent } from "../helpers/content.js";
 import {
   AgentTimeoutError,
+  buildLlmCall,
   formatAgentEvent,
   formatDurationMs,
   resolveAgentTimeoutMs,
@@ -262,16 +263,4 @@ function buildLayerFourUpdate<TOutput extends Layer4AgentOutput>(
       cioOut.portfolio_actions;
   }
   return baseUpdate;
-}
-
-function buildLlmCall(agentId: string, handle: LlmHandle): LlmCallRecord {
-  return {
-    ts: new Date().toISOString(),
-    agent: agentId,
-    model: handle.model,
-    provider: handle.provider,
-    prompt_tokens: 0,
-    completion_tokens: 0,
-    cost_usd: 0,
-  };
 }
