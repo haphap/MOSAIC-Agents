@@ -205,3 +205,26 @@ def test_get_pboc_ops_empty_cache_reports_refresh_failure(tmp_path, monkeypatch)
 
     with pytest.raises(DataVendorUnavailable, match="cache is empty"):
         pboc_ops.get_pboc_ops("2026-06-04", 2, cache_dir=tmp_path)
+
+
+def test_get_pboc_ops_prefers_external_china_policy_db(tmp_path, monkeypatch):
+    record = pboc_ops.parse_article_page(
+        ARTICLE_HTML,
+        ARTICLE_URL,
+        "transaction_notice",
+    )
+    db_root = tmp_path / "china-policy-db"
+    parsed_dir = db_root / "data" / "pboc_ops" / "parsed"
+    parsed_dir.mkdir(parents=True)
+    (parsed_dir / "articles.jsonl").write_text(
+        json.dumps(record, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MOSAIC_CHINA_POLICY_DB_DIR", str(db_root))
+    monkeypatch.setenv("MOSAIC_PBOC_OPS_DISABLE_NETWORK", "1")
+
+    out = pboc_ops.get_pboc_ops("2026-06-04", 2)
+
+    assert "china-policy-db" in out
+    assert "公开市场业务交易公告 [2026]第105号" in out
+    assert "reverse_repo" in out

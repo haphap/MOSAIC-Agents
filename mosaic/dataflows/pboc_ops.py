@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import urljoin, urlparse
 
+from .china_policy_db import load_external_records
 from .exceptions import DataVendorUnavailable
 
 logger = logging.getLogger(__name__)
@@ -838,6 +839,10 @@ def load_pboc_open_market_records(cache_dir: str | Path | None = None) -> list[d
     return _load_articles(pboc_ops_cache_dir(cache_dir))
 
 
+def _load_external_pboc_records() -> tuple[list[dict[str, Any]], str] | None:
+    return load_external_records("pboc_ops/parsed/articles.jsonl")
+
+
 def _records_in_window(
     records: Iterable[dict[str, Any]],
     start_date: str,
@@ -901,6 +906,26 @@ def get_pboc_ops(
 ) -> str:
     """Return parsed PBOC open-market announcements for a date window."""
     start_date, end_date = _date_window(curr_date, int(look_back_days or 0))
+    if cache_dir is None:
+        try:
+            external = _load_external_pboc_records()
+        except DataVendorUnavailable as exc:
+            logger.warning("Ignoring unavailable china-policy-db PBOC records: %s", exc)
+            external = None
+        if external:
+            external_records, source = external
+            records = _records_in_window(external_records, start_date, end_date)
+            category_names = " / ".join(category.name for category in PBOC_OMO_CATEGORIES)
+            return _records_to_markdown_csv(
+                records,
+                title=f"PBOC Open Market Announcements ({start_date} → {end_date})",
+                subtitle=f"Source: china-policy-db ({source}). Categories: {category_names}.",
+                empty_note=(
+                    f"No PBOC open-market announcements recorded between "
+                    f"{start_date} and {end_date}."
+                ),
+            )
+
     cache_root = pboc_ops_cache_dir(cache_dir)
     refresh_note = "local cache"
     try:

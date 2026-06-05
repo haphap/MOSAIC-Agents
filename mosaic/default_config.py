@@ -54,6 +54,8 @@ DEFAULT_CONFIG = {
         "MOSAIC_CACHE_DIR",
         os.path.join(_MOSAIC_HOME, "cache"),
     ),
+    "china_policy_db_dir": os.getenv("MOSAIC_CHINA_POLICY_DB_DIR"),
+    "china_policy_db_raw_base_url": os.getenv("MOSAIC_CHINA_POLICY_DB_RAW_BASE_URL"),
     # ============== LLM settings ==============
     # Default to Anthropic Claude Sonnet (Plan §1). Local Lemonade Qwen and
     # DeepSeek can be swapped in via config.set at runtime to control cost.

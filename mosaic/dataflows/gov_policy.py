@@ -23,6 +23,7 @@ from html import unescape
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .china_policy_db import load_external_records
 from .exceptions import DataVendorUnavailable
 
 logger = logging.getLogger(__name__)
@@ -275,8 +276,22 @@ def parse_search_response(
     category_obj = _category_from_id(category)
     code = str(payload.get("code") or "")
     if code and code != "200":
+        msg = _normalise_text(payload.get("msg"))
+        if code == "1001" and "没有找到相关结果" in msg:
+            params = payload.get("paramsVO") or {}
+            parsed_page_size = int(params.get("n") or _DEFAULT_PAGE_SIZE)
+            return {
+                "category_id": category_obj.id,
+                "category": category_obj.name,
+                "query_t": category_obj.query_t,
+                "page": int(params.get("p") or 1),
+                "page_size": parsed_page_size,
+                "total_count": 0,
+                "total_pages": 0,
+                "records": [],
+            }
         raise DataVendorUnavailable(
-            f"gov.cn policy response code {code}: {_normalise_text(payload.get('msg'))}"
+            f"gov.cn policy response code {code}: {msg}"
         )
 
     search = payload.get("searchVO") or {}
@@ -555,6 +570,10 @@ def load_gov_policy_records(cache_dir: str | Path | None = None) -> list[dict[st
     return _load_records(gov_policy_cache_dir(cache_dir))
 
 
+def _load_external_gov_policy_records() -> tuple[list[dict[str, Any]], str] | None:
+    return load_external_records("gov_policy/parsed/policy_documents.jsonl")
+
+
 def _records_in_window(
     records: Iterable[dict[str, Any]],
     start_date: str,
@@ -631,6 +650,31 @@ def get_gov_policy_documents(
 ) -> str:
     """Return gov.cn policy documents for a date window."""
     start_date, end_date = _date_window(curr_date, int(look_back_days or 0))
+    if cache_dir is None:
+        try:
+            external = _load_external_gov_policy_records()
+        except DataVendorUnavailable as exc:
+            logger.warning("Ignoring unavailable china-policy-db gov.cn policy records: %s", exc)
+            external = None
+        if external:
+            external_records, source = external
+            records = _records_in_window(external_records, start_date, end_date)
+            records = _filter_keywords(records, keywords)
+            category_names = " / ".join(category.name for category in GOV_POLICY_CATEGORIES)
+            suffix = ""
+            terms = _normalise_terms(keywords)
+            if terms:
+                suffix = f"; keyword filter: {', '.join(terms)}"
+            return _records_to_markdown_csv(
+                records,
+                title=f"产业政策 / Gov.cn Policy Documents ({start_date} → {end_date})",
+                subtitle=(
+                    f"Source: china-policy-db ({source}). "
+                    f"Categories: {category_names}{suffix}."
+                ),
+                empty_note=f"No gov.cn policy documents recorded between {start_date} and {end_date}.",
+            )
+
     cache_root = gov_policy_cache_dir(cache_dir)
     refresh_note = "local cache"
     try:

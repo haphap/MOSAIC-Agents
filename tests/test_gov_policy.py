@@ -72,6 +72,21 @@ def test_parse_search_response_extracts_policy_fields():
     ]
 
 
+def test_parse_search_response_treats_no_results_as_empty_page():
+    parsed = gov_policy.parse_search_response(
+        {
+            "code": 1001,
+            "msg": "抱歉，没有找到相关结果",
+            "paramsVO": {"p": 1, "n": 50},
+        },
+        "gongwen",
+    )
+
+    assert parsed["total_count"] == 0
+    assert parsed["total_pages"] == 0
+    assert parsed["records"] == []
+
+
 def test_crawl_writes_raw_parsed_manifest_and_get_returns_csv(tmp_path):
     responses = {
         1: _payload([ROW_POLICY], page=1, page_size=1, total_count=2),
@@ -138,3 +153,29 @@ def test_get_gov_policy_uses_cached_records_when_refresh_fails(tmp_path):
 
     assert "local cache; refresh skipped" in out
     assert "加快农业农村现代化" in out
+
+
+def test_get_gov_policy_prefers_external_china_policy_db(tmp_path, monkeypatch):
+    records = gov_policy.parse_search_response(
+        _payload([ROW_POLICY, ROW_ENERGY]),
+        "gongwen",
+    )["records"]
+    db_root = tmp_path / "china-policy-db"
+    parsed_dir = db_root / "data" / "gov_policy" / "parsed"
+    parsed_dir.mkdir(parents=True)
+    (parsed_dir / "policy_documents.jsonl").write_text(
+        "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MOSAIC_CHINA_POLICY_DB_DIR", str(db_root))
+    monkeypatch.setenv("MOSAIC_GOV_POLICY_DISABLE_NETWORK", "1")
+
+    out = gov_policy.get_gov_policy_documents(
+        "2026-06-05",
+        7,
+        keywords=("能源",),
+    )
+
+    assert "china-policy-db" in out
+    assert "非化石能源" in out
+    assert "农业农村现代化" not in out
